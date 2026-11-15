@@ -57,13 +57,19 @@ async def entrypoint(ctx: agents.JobContext) -> None:
         ),
     )
 
-    avatar_options = {"pal_id": os.environ["TAVUS_PAL_ID"]}
-    if os.getenv("TAVUS_FACE_ID"):
-        avatar_options["face_id"] = os.environ["TAVUS_FACE_ID"]
-    avatar = tavus.AvatarSession(**avatar_options)
-    await avatar.start(session, room=ctx.room)
-    # Wait until Tavus has joined and published video before the first TTS turn.
-    await avatar.wait_for_join(timeout=30)
+    avatar = None
+    try:
+        avatar_options = {"pal_id": os.environ["TAVUS_PAL_ID"]}
+        if os.getenv("TAVUS_FACE_ID"):
+            avatar_options["face_id"] = os.environ["TAVUS_FACE_ID"]
+        avatar = tavus.AvatarSession(**avatar_options)
+        await avatar.start(session, room=ctx.room)
+        logger.info("Tavus avatar session started")
+    except Exception:
+        # A Tavus outage or configuration error must not prevent microphone/STT
+        # and the text assistant from starting in the LiveKit room.
+        logger.exception("Could not start Tavus avatar; continuing without video")
+        avatar = None
 
     async def publish_room_message(message: dict) -> None:
         try:
@@ -110,8 +116,21 @@ async def entrypoint(ctx: agents.JobContext) -> None:
     await session.start(
         agent=PersianAssistant(),
         room=ctx.room,
-        room_output_options=RoomOutputOptions(audio_enabled=False),
+        # Tavus owns audio when available; fall back to direct LiveKit audio if
+        # avatar startup failed so the assistant can still speak.
+        room_output_options=RoomOutputOptions(audio_enabled=avatar is None),
     )
+
+    if avatar is not None:
+        async def log_avatar_join() -> None:
+            try:
+                await avatar.wait_for_join(timeout=30)
+                logger.info("Tavus avatar joined and published its video track")
+            except Exception:
+                # Do not let a missing avatar shut down an otherwise usable voice agent.
+                logger.exception("Tavus avatar did not join; voice agent remains active")
+
+        asyncio.create_task(log_avatar_join())
 
     try:
         metadata = json.loads(ctx.job.metadata or "{}")
