@@ -60,4 +60,4 @@ NODE_ENV=production npm start
 - `GET /api/health` — وضعیت پیکربندی، بدون افشای رازها
 - `POST /api/session` — ساخت LiveKit room، dispatch کردن Agent و برگرداندن JWT کوتاه‌عمر برای همان room
 
-`agent.py` به LiveKit وصل می‌شود، STT/LLM/TTS فارسی را اجرا می‌کند و با پلاگین رسمی Tavus، آواتار را به همان room اضافه می‌کند.
+`agent.py` به LiveKit وصل می‌شود، STT/LLM/TTS فارسی را اجرا می‌کند و با پلاگین رسمی Tavus، آواتار را به همان room اضافه می‌کند. متن تشخیص‌داده‌شده از صدای کاربر از رویداد `user_input_transcribed` دریافت و به‌صورت data packet زنده به رابط فرستاده می‌شود؛ متن‌های نهایی و متن موقتِ در حال تشخیص در پنل گفتگو نمایش داده می‌شوند.

@@ -1,5 +1,6 @@
 """Persian LiveKit voice agent with a Tavus-rendered avatar."""
 
+import asyncio
 import json
 import os
 
@@ -51,6 +52,25 @@ async def entrypoint(ctx: agents.JobContext) -> None:
         avatar_options["face_id"] = os.environ["TAVUS_FACE_ID"]
     avatar = tavus.AvatarSession(**avatar_options)
     await avatar.start(session, room=ctx.room)
+
+    async def publish_user_transcript(event) -> None:
+        text = (event.transcript or "").strip()
+        if not text:
+            return
+        payload = json.dumps(
+            {"type": "user_transcript", "text": text, "final": event.is_final},
+            ensure_ascii=False,
+        )
+        await ctx.room.local_participant.publish_data(
+            payload,
+            reliable=True,
+            topic="transcript",
+        )
+
+    @session.on("user_input_transcribed")
+    def on_user_input_transcribed(event) -> None:
+        asyncio.create_task(publish_user_transcript(event))
+
     await session.start(agent=PersianAssistant(), room=ctx.room)
 
     try:
