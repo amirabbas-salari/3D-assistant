@@ -1,6 +1,6 @@
 # همراه — دستیار صوتی و تصویری فارسی
 
-دستیار مکالمه‌ای زنده با رابط فارسی راست‌چین، گفتار زنده از LiveKit Inference و آواتار ویدیویی Tavus که در همان LiveKit room حضور دارد و با صدا همگام می‌شود. STT اولیه `xai/stt-2` با زبان `fa` و TTS اولیه `google/gemini-3.8-flash-tts` با صدای `Kore` و زبان `fa` است؛ هر دو از LiveKit Inference فراخوانی می‌شوند. شناسه‌ی مدل‌ها و voice از `.env` قابل تغییرند.
+دستیار مکالمه‌ای زنده با رابط فارسی راست‌چین، STT/TTS فارسی از LiveKit Inference، LLM از OpenRouter و آواتار ویدیویی Tavus که در همان LiveKit room حضور دارد و با صدا همگام می‌شود. STT اولیه `xai/stt-2` با زبان `fa` و TTS اولیه `google/gemini-3.8-flash-tts` با صدای `Kore` و زبان `fa` است. مدل زبانی با `OPENROUTER_MODEL` انتخاب می‌شود (پیش‌فرض `openrouter/auto`).
 
 کلیدهای سرویس فقط روی سرور/API و Agent نگهداری می‌شوند. مرورگر تنها یک توکن کوتاه‌عمرِ محدود به همان room دریافت می‌کند.
 
@@ -10,6 +10,7 @@
 - Python 3.10+
 - حساب LiveKit Cloud با Inference فعال
 - حساب Tavus و Face/Replica قابل استفاده با LiveKit
+- کلید API در OpenRouter و دسترسی به مدل انتخابی
 
 ## راه‌اندازی
 
@@ -18,7 +19,7 @@ npm install
 cp .env.example .env
 ```
 
-مقادیر LiveKit و Tavus را در `.env` وارد کنید. سپس agent پایتون را در یک ترمینال نصب و اجرا کنید:
+مقادیر LiveKit، Tavus و `OPENROUTER_API_KEY` را در `.env` وارد کنید. سپس agent پایتون را در یک ترمینال نصب و اجرا کنید:
 
 ```bash
 python -m venv .venv
@@ -48,9 +49,9 @@ NODE_ENV=production npm start
 4. مدل‌های فارسی پیش‌فرض:
    - STT: `xai/stt-2` با `fa`
    - TTS: `google/gemini-3.8-flash-tts` با صدای `Kore` و `fa`
-   - LLM: `google/gemini-2.5-flash` با دستورالعمل فارسی
+   - LLM: مدل انتخابی OpenRouter؛ پیش‌فرض `openrouter/auto`. شناسه‌ی مدل‌هایی مانند `provider/model` را از فهرست OpenRouter انتخاب کنید.
 
-   برای تغییر مدل‌ها از `LIVEKIT_STT_MODEL`, `LIVEKIT_STT_LANGUAGE`, `LIVEKIT_TTS_MODEL`, `LIVEKIT_TTS_VOICE`, `LIVEKIT_TTS_LANGUAGE` و `LIVEKIT_LLM_MODEL` استفاده کنید. پشتیبانی زبان/voice و در دسترس بودن مدل‌ها ممکن است با حساب یا نسخه‌ی سرویس تغییر کند؛ پیش از استفاده، مدل منتخب را در LiveKit Inference بررسی کنید. اگر Inference برای project فعال نباشد، مدل‌ها پاسخ نمی‌دهند.
+   برای تغییر مدل‌ها از `LIVEKIT_STT_MODEL`, `LIVEKIT_STT_LANGUAGE`, `LIVEKIT_TTS_MODEL`, `LIVEKIT_TTS_VOICE`, `LIVEKIT_TTS_LANGUAGE` و `OPENROUTER_MODEL` استفاده کنید. کلید OpenRouter فقط در `.env` سمت سرور/Agent نگهداری می‌شود. پشتیبانی زبان/voice و دسترسی به مدل‌ها ممکن است به حساب و مدل انتخابی وابسته باشد.
 
 با شروع گفتگو فقط میکروفون کاربر منتشر می‌شود؛ تصویر همراه از شرکت‌کننده‌ی ویدیویی Tavus می‌آید. مرورگر برای میکروفون اجازه می‌خواهد.
 

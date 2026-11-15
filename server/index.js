@@ -13,7 +13,7 @@ app.use(express.json({ limit: '32kb' }));
 function isConfigured() {
   return Boolean(
     process.env.LIVEKIT_URL && process.env.LIVEKIT_API_KEY && process.env.LIVEKIT_API_SECRET &&
-    process.env.TAVUS_API_KEY && process.env.TAVUS_PAL_ID,
+    process.env.TAVUS_API_KEY && process.env.TAVUS_PAL_ID && process.env.OPENROUTER_API_KEY,
   );
 }
 
@@ -23,7 +23,7 @@ app.get('/api/health', (_req, res) => {
 
 app.post('/api/session', async (req, res) => {
   if (!isConfigured()) {
-    return res.status(503).json({ error: 'برای شروع، اطلاعات LiveKit و Tavus را در فایل .env تنظیم کنید.' });
+    return res.status(503).json({ error: 'برای شروع، اطلاعات LiveKit، Tavus و OpenRouter را در فایل .env تنظیم کنید.' });
   }
 
   const roomName = `hamrah-${randomUUID().slice(0, 12)}`;
