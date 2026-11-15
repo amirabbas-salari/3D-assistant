@@ -1,6 +1,6 @@
 # همراه — دستیار صوتی و تصویری فارسی
 
-دستیار مکالمه‌ای زنده با رابط فارسی راست‌چین، STT/TTS فارسی از LiveKit Inference، LLM از OpenRouter و آواتار ویدیویی Tavus که در همان LiveKit room حضور دارد و با صدا همگام می‌شود. STT اولیه `xai/stt-2` با زبان `fa` و TTS اولیه `google/gemini-3.8-flash-tts` با صدای `Kore` و زبان `fa` است. مدل زبانی با `OPENROUTER_MODEL` انتخاب می‌شود (پیش‌فرض `openrouter/auto`).
+دستیار مکالمه‌ای زنده با رابط فارسی راست‌چین، STT/TTS فارسی از LiveKit Inference، LLM از OpenRouter و آواتار ویدیویی Tavus که در همان LiveKit room حضور دارد و با صدا همگام می‌شود. STT اولیه `deepgram/nova-3` با زبان `fa` و TTS اولیه `google/gemini-3.8-flash-tts` با صدای `Kore` و زبان `fa` است. مدل زبانی با `OPENROUTER_MODEL` انتخاب می‌شود (پیش‌فرض `openrouter/auto`).
 
 کلیدهای سرویس فقط روی سرور/API و Agent نگهداری می‌شوند. مرورگر تنها یک توکن کوتاه‌عمرِ محدود به همان room دریافت می‌کند.
 
@@ -47,13 +47,13 @@ NODE_ENV=production npm start
 2. در Tavus یک PAL بسازید که `pipeline_mode` آن `echo` و `layers.transport.transport_type` آن `livekit` باشد. شناسه‌ی PAL و API key را در `TAVUS_PAL_ID` و `TAVUS_API_KEY` بگذارید. شناسه‌ی Face/Replica را در `TAVUS_FACE_ID` تنظیم کنید.
 3. Agent به‌صورت صریح با نام `hamrah-agent` dispatch می‌شود؛ همین نام را با `LIVEKIT_AGENT_NAME` هماهنگ نگه دارید. Agent را با `python agent.py dev` اجرا کنید.
 4. مدل‌های فارسی پیش‌فرض:
-   - STT: `xai/stt-2` با `fa`
+   - STT: `deepgram/nova-3` با `fa`
    - TTS: `google/gemini-3.8-flash-tts` با صدای `Kore` و `fa`
    - LLM: مدل انتخابی OpenRouter؛ پیش‌فرض `openrouter/auto`. شناسه‌ی مدل‌هایی مانند `provider/model` را از فهرست OpenRouter انتخاب کنید.
 
    برای تغییر مدل‌ها از `LIVEKIT_STT_MODEL`, `LIVEKIT_STT_LANGUAGE`, `LIVEKIT_TTS_MODEL`, `LIVEKIT_TTS_VOICE`, `LIVEKIT_TTS_LANGUAGE` و `OPENROUTER_MODEL` استفاده کنید. کلید OpenRouter فقط در `.env` سمت سرور/Agent نگهداری می‌شود. پشتیبانی زبان/voice و دسترسی به مدل‌ها ممکن است به حساب و مدل انتخابی وابسته باشد.
 
-با شروع گفتگو فقط میکروفون کاربر منتشر می‌شود؛ تصویر همراه از شرکت‌کننده‌ی ویدیویی Tavus می‌آید. مرورگر برای میکروفون اجازه می‌خواهد.
+با شروع گفتگو فقط میکروفون کاربر منتشر می‌شود؛ تصویر همراه از شرکت‌کننده‌ی ویدیویی Tavus می‌آید و صدای Agent از ترک‌های صوتی LiveKit به عنصر صوتی مرورگر متصل می‌شود. اگر مرورگر پخش خودکار صدا را مسدود کند، روی دکمه‌ی «برای شنیدن صدا بزن» در تصویر کلیک کنید. STT پیش‌فرض `deepgram/nova-3` با زبان `fa` است (قابل تغییر با `LIVEKIT_STT_MODEL` و `LIVEKIT_STT_LANGUAGE`).
 
 ## API
 

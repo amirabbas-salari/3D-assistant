@@ -6,6 +6,18 @@ import {
 } from 'lucide-react';
 import './styles.css';
 
+function RemoteAudioOutput({ track }) {
+  const audioRef = useRef(null);
+
+  useEffect(() => {
+    if (!audioRef.current) return undefined;
+    track.attach(audioRef.current);
+    return () => track.detach(audioRef.current);
+  }, [track]);
+
+  return <audio ref={audioRef} autoPlay playsInline className="remote-audio-output" />;
+}
+
 function App() {
   const [phase, setPhase] = useState('idle');
   const [error, setError] = useState('');
@@ -15,6 +27,8 @@ function App() {
   const [transcriptLines, setTranscriptLines] = useState([]);
   const [draftTranscript, setDraftTranscript] = useState('');
   const [assistantVideo, setAssistantVideo] = useState(null);
+  const [assistantAudioTracks, setAssistantAudioTracks] = useState([]);
+  const [audioNeedsGesture, setAudioNeedsGesture] = useState(false);
   const [showSettings, setShowSettings] = useState(false);
   const roomRef = useRef(null);
   const videoRef = useRef(null);
@@ -64,23 +78,39 @@ function App() {
         }
       });
       room.on(RoomEvent.TrackSubscribed, (track, _publication, participant) => {
-        if (track.kind === Track.Kind.Video && participant.identity !== room.localParticipant.identity) setAssistantVideo(track);
+        if (participant.identity === room.localParticipant.identity) return;
+        if (track.kind === Track.Kind.Video) setAssistantVideo(track);
+        if (track.kind === Track.Kind.Audio) setAssistantAudioTracks((tracks) => tracks.includes(track) ? tracks : [...tracks, track]);
       });
       room.on(RoomEvent.TrackUnsubscribed, (track) => {
         if (track.kind === Track.Kind.Video) setAssistantVideo(null);
+        if (track.kind === Track.Kind.Audio) setAssistantAudioTracks((tracks) => tracks.filter((item) => item !== track));
+      });
+      room.on(RoomEvent.AudioPlaybackStatusChanged, () => {
+        setAudioNeedsGesture(!room.canPlaybackAudio);
       });
       await room.connect(data.serverUrl, data.token);
       await room.localParticipant.setMicrophoneEnabled(true);
-      await room.startAudio().catch(() => {});
+      try {
+        await room.startAudio();
+        setAudioNeedsGesture(!room.canPlaybackAudio);
+      } catch {
+        setAudioNeedsGesture(true);
+      }
       for (const participant of room.remoteParticipants.values()) {
         for (const publication of participant.videoTrackPublications.values()) {
           if (publication.track) setAssistantVideo(publication.track);
+        }
+        for (const publication of participant.audioTrackPublications.values()) {
+          if (publication.track) setAssistantAudioTracks((tracks) => tracks.includes(publication.track) ? tracks : [...tracks, publication.track]);
         }
       }
       setPhase('live');
     } catch (e) {
       roomRef.current?.disconnect();
       roomRef.current = null;
+      setAssistantAudioTracks([]);
+      setAudioNeedsGesture(false);
       setError(e.message || 'ارتباط برقرار نشد. دوباره تلاش کنید.');
       setPhase('idle');
     }
@@ -90,6 +120,8 @@ function App() {
     roomRef.current?.disconnect();
     roomRef.current = null;
     setAssistantVideo(null);
+    setAssistantAudioTracks([]);
+    setAudioNeedsGesture(false);
     setPhase('idle');
     setMuted(false);
     setOpeningLine('');
@@ -99,6 +131,15 @@ function App() {
     const nextMuted = !muted;
     await roomRef.current?.localParticipant.setMicrophoneEnabled(!nextMuted);
     setMuted(nextMuted);
+  }
+
+  async function enableAudioPlayback() {
+    try {
+      await roomRef.current?.startAudio();
+      setAudioNeedsGesture(Boolean(roomRef.current && !roomRef.current.canPlaybackAudio));
+    } catch {
+      setAudioNeedsGesture(true);
+    }
   }
 
   const isLive = phase === 'live';
@@ -132,6 +173,10 @@ function App() {
             {isLive ? (
               <div className="video-frame-wrap">
                 <video ref={videoRef} className={`assistant-video ${assistantVideo ? 'visible' : ''}`} autoPlay playsInline />
+                <div className="audio-track-output" aria-hidden="true">
+                  {assistantAudioTracks.map((track) => <RemoteAudioOutput key={track.sid} track={track} />)}
+                </div>
+                {audioNeedsGesture && <button className="enable-audio-button" onClick={enableAudioPlayback}><Volume2 size={15}/> برای شنیدن صدا بزن</button>}
                 {!assistantVideo && <div className="avatar-waiting"><div className="waiting-orb"><AudioLines size={28}/></div><strong>همراه در حال آماده‌شدن است</strong><span>چند لحظه صبر کن...</span></div>}
                 <div className="live-badge"><span className="live-dot"/> زنده</div>
                 <div className="call-controls">

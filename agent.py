@@ -33,7 +33,7 @@ async def entrypoint(ctx: agents.JobContext) -> None:
 
     session = AgentSession(
         stt=inference.STT(
-            model=os.getenv("LIVEKIT_STT_MODEL", "xai/stt-2"),
+            model=os.getenv("LIVEKIT_STT_MODEL", "deepgram/nova-3"),
             language=os.getenv("LIVEKIT_STT_LANGUAGE", "fa"),
         ),
         llm=openai.LLM.with_openrouter(
