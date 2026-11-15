@@ -58,6 +58,7 @@ async def entrypoint(ctx: agents.JobContext) -> None:
     )
 
     avatar = None
+    avatar_ready = False
     try:
         avatar_options = {"pal_id": os.environ["TAVUS_PAL_ID"]}
         if os.getenv("TAVUS_FACE_ID"):
@@ -65,10 +66,15 @@ async def entrypoint(ctx: agents.JobContext) -> None:
         avatar = tavus.AvatarSession(**avatar_options)
         await avatar.start(session, room=ctx.room)
         logger.info("Tavus avatar session started")
+        # Keep the known-good ordering: let Tavus join and publish video before
+        # AgentSession starts routing the first response through the avatar.
+        await avatar.wait_for_join(timeout=30)
+        avatar_ready = True
+        logger.info("Tavus avatar joined and published its video track")
     except Exception:
-        # A Tavus outage or configuration error must not prevent microphone/STT
-        # and the text assistant from starting in the LiveKit room.
-        logger.exception("Could not start Tavus avatar; continuing without video")
+        # A Tavus outage or configuration error must not permanently block STT.
+        # The bounded wait falls back to the normal LiveKit audio output.
+        logger.exception("Tavus avatar failed to start or join; continuing without video")
         avatar = None
 
     async def publish_room_message(message: dict) -> None:
@@ -116,21 +122,10 @@ async def entrypoint(ctx: agents.JobContext) -> None:
     await session.start(
         agent=PersianAssistant(),
         room=ctx.room,
-        # Tavus owns audio when available; fall back to direct LiveKit audio if
-        # avatar startup failed so the assistant can still speak.
-        room_output_options=RoomOutputOptions(audio_enabled=avatar is None),
+        # Tavus owns audio only once its participant/video track is ready; if it
+        # failed or timed out, use direct LiveKit audio as a fallback.
+        room_output_options=RoomOutputOptions(audio_enabled=not avatar_ready),
     )
-
-    if avatar is not None:
-        async def log_avatar_join() -> None:
-            try:
-                await avatar.wait_for_join(timeout=30)
-                logger.info("Tavus avatar joined and published its video track")
-            except Exception:
-                # Do not let a missing avatar shut down an otherwise usable voice agent.
-                logger.exception("Tavus avatar did not join; voice agent remains active")
-
-        asyncio.create_task(log_avatar_join())
 
     try:
         metadata = json.loads(ctx.job.metadata or "{}")
