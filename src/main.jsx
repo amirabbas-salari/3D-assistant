@@ -66,12 +66,16 @@ function App() {
       room.on(RoomEvent.DataReceived, (payload) => {
         try {
           const message = JSON.parse(new TextDecoder().decode(payload));
-          if (message.type !== 'user_transcript' || typeof message.text !== 'string') return;
-          if (message.final) {
-            setTranscriptLines((lines) => [...lines, { id: `${Date.now()}-${Math.random()}`, text: message.text }].slice(-40));
-            setDraftTranscript('');
-          } else {
-            setDraftTranscript(message.text);
+          if (typeof message.text !== 'string') return;
+          if (message.type === 'user_transcript') {
+            if (message.final) {
+              setTranscriptLines((lines) => [...lines, { id: `${Date.now()}-${Math.random()}`, role: 'user', text: message.text }].slice(-40));
+              setDraftTranscript('');
+            } else {
+              setDraftTranscript(message.text);
+            }
+          } else if (message.type === 'assistant_reply') {
+            setTranscriptLines((lines) => [...lines, { id: `${Date.now()}-${Math.random()}`, role: 'assistant', text: message.text }].slice(-40));
           }
         } catch (parseError) {
           console.warn('Could not parse transcript data packet', parseError);
@@ -180,6 +184,7 @@ function App() {
                 {!assistantVideo && <div className="avatar-waiting"><div className="waiting-orb"><AudioLines size={28}/></div><strong>همراه در حال آماده‌شدن است</strong><span>چند لحظه صبر کن...</span></div>}
                 <div className="live-badge"><span className="live-dot"/> زنده</div>
                 <div className="call-controls">
+                  <button className="call-control" onClick={enableAudioPlayback} aria-label="فعال‌کردن پخش صدای همراه"><Volume2 size={17}/></button>
                   <button className={`call-control ${muted ? 'control-muted' : ''}`} onClick={toggleMute} aria-label={muted ? 'روشن‌کردن میکروفون' : 'بی‌صداکردن میکروفون'}>{muted ? <MicOff size={17}/> : <Mic size={17}/>}</button>
                   <span>{muted ? 'میکروفون خاموش' : 'میکروفون روشن'}</span>
                 </div>
@@ -195,20 +200,20 @@ function App() {
               </div>
             )}
             <div className="video-footer">
-              <div className="voice-status"><span className="sound-icon"><Volume2 size={16}/></span><div><strong>{isLive ? 'صدای گفتگو فعال است' : 'صدای طبیعی و روان'}</strong><small>{isLive ? 'از کنترل‌های داخل تصویر استفاده کن' : 'به زبان فارسی با هم صحبت می‌کنیم'}</small></div></div>
+              <div className="voice-status"><span className="sound-icon"><Volume2 size={16}/></span><div><strong>{isLive ? (assistantAudioTracks.length ? 'ترک صدای آواتار متصل است' : 'در انتظار صدای آواتار') : 'صدای طبیعی و روان'}</strong><small>{isLive ? (audioNeedsGesture ? 'برای پخش، دکمه‌ی صدا را بزن' : `تعداد ترک‌های صوتی: ${assistantAudioTracks.length}`) : 'به زبان فارسی با هم صحبت می‌کنیم'}</small></div></div>
               <div className="video-quality"><span className="quality-dot"/> HD</div>
             </div>
           </div>
 
           <aside className="side-panel">
             <div className="side-heading"><div><span className="side-kicker">جلسه‌ی جدید</span><h2>با چی کمکت کنم؟</h2></div><span className="sparkle-bubble"><Sparkles size={17}/></span></div>
-            <p className="side-description">{isLive ? 'متنی که از حرف‌هایت تشخیص داده می‌شود، همین‌جا نمایش داده می‌شود.' : 'از یک سؤال ساده تا یک گفتگوی طولانی؛ از همین‌جا شروع کن.'}</p>
+            <p className="side-description">{isLive ? 'حرف‌های تشخیص‌داده‌شده و متن پاسخ همراه اینجا می‌آیند؛ کمک می‌کند بفهمیم مدل زبانی جواب داده است یا نه.' : 'از یک سؤال ساده تا یک گفتگوی طولانی؛ از همین‌جا شروع کن.'}</p>
             {isLive ? (
               <>
-                <div className="suggestion-label">رونویسی زنده‌ی صحبت‌های شما</div>
+                <div className="suggestion-label">متن زنده‌ی گفتگو</div>
                 <div className="transcript-box" ref={transcriptRef} aria-live="polite" aria-label="متن تشخیص‌داده‌شده از صحبت‌های شما">
                   {transcriptLines.length === 0 && !draftTranscript && <div className="transcript-empty"><span className="online-indicator"/>منتظر اولین جمله‌ات هستم...</div>}
-                  {transcriptLines.map((line) => <div className="transcript-line" key={line.id}><span>شما</span><p>{line.text}</p></div>)}
+                  {transcriptLines.map((line) => <div className={`transcript-line ${line.role === 'assistant' ? 'transcript-assistant' : ''}`} key={line.id}><span>{line.role === 'assistant' ? 'همراه' : 'شما'}</span><p>{line.text}</p></div>)}
                   {draftTranscript && <div className="transcript-line transcript-partial"><span>در حال تشخیص</span><p>{draftTranscript}</p></div>}
                 </div>
               </>
