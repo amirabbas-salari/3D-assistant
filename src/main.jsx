@@ -91,7 +91,7 @@ function App() {
         <div className="top-actions">
           <span className="privacy-pill"><ShieldCheck size={15} /> گفتگوی خصوصی</span>
           <button className="icon-button settings-button" aria-label="تنظیمات" onClick={() => setShowSettings(!showSettings)}><Settings2 size={19}/></button>
-          {showSettings && <div className="settings-pop"><strong>تنظیمات اتصال</strong><p>آواتار تصویری با Tavus و گفتار فارسی با LiveKit Inference اجرا می‌شود. کلیدهای سرویس فقط روی سرور می‌مانند.</p><div className="settings-state"><span className={health?.configured ? 'status-dot green' : 'status-dot'} />{health?.configured ? 'پیکربندی کامل است' : 'اطلاعات Tavus و LiveKit ناقص است'}</div></div>}
+          {showSettings && <div className="settings-pop"><strong>تنظیمات اتصال</strong><p>آواتار با Tavus، STT/TTS فارسی با LiveKit و LLM با OpenRouter اجرا می‌شود. کلیدها فقط روی سرور می‌مانند.</p><div className="settings-state"><span className={health?.configured ? 'status-dot green' : 'status-dot'} />{health?.configured ? 'پیکربندی کامل است' : 'تنظیمات سرویس‌ها ناقص است'}</div></div>}
         </div>
       </header>
 
@@ -152,7 +152,7 @@ function App() {
                 {phase === 'connecting' ? <><span className="spinner"/> در حال آماده‌سازی...</> : <><Phone size={17} fill="currentColor"/> شروع گفتگوی صوتی و تصویری <ArrowUpLeft size={17}/></>}
               </button>
             )}
-            {!health?.configured && <div className="setup-hint"><span className="hint-icon"><Settings2 size={15}/></span><span>برای فعال‌سازی گفتگو، تنظیمات Tavus و LiveKit را در فایل <code>.env</code> وارد کن.</span></div>}
+            {!health?.configured && <div className="setup-hint"><span className="hint-icon"><Settings2 size={15}/></span><span>برای فعال‌سازی گفتگو، کلیدهای LiveKit، Tavus و OpenRouter را در فایل <code>.env</code> تنظیم کن.</span></div>}
             <div className="privacy-note"><ShieldCheck size={14}/><span>با شروع تماس، مرورگر برای دسترسی به میکروفون اجازه می‌خواهد.</span></div>
           </aside>
         </section>

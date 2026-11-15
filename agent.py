@@ -6,7 +6,7 @@ import os
 from dotenv import load_dotenv
 from livekit import agents
 from livekit.agents import Agent, AgentSession, inference
-from livekit.plugins import tavus
+from livekit.plugins import openai, tavus
 
 load_dotenv()
 
@@ -27,12 +27,18 @@ class PersianAssistant(Agent):
 
 @server.rtc_session(agent_name=os.getenv("LIVEKIT_AGENT_NAME", "hamrah-agent"))
 async def entrypoint(ctx: agents.JobContext) -> None:
+    if not os.getenv("OPENROUTER_API_KEY"):
+        raise RuntimeError("OPENROUTER_API_KEY is required to run the assistant LLM")
+
     session = AgentSession(
         stt=inference.STT(
             model=os.getenv("LIVEKIT_STT_MODEL", "xai/stt-2"),
             language=os.getenv("LIVEKIT_STT_LANGUAGE", "fa"),
         ),
-        llm=inference.LLM(model=os.getenv("LIVEKIT_LLM_MODEL", "google/gemini-2.5-flash")),
+        llm=openai.LLM.with_openrouter(
+            model=os.getenv("OPENROUTER_MODEL", "openrouter/auto"),
+            app_name="Hamrah Persian Voice Assistant",
+        ),
         tts=inference.TTS(
             model=os.getenv("LIVEKIT_TTS_MODEL", "google/gemini-3.8-flash-tts"),
             voice=os.getenv("LIVEKIT_TTS_VOICE", "Kore"),
