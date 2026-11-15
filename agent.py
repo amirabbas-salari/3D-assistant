@@ -2,16 +2,18 @@
 
 import asyncio
 import json
+import logging
 import os
 
 from dotenv import load_dotenv
 from livekit import agents
-from livekit.agents import Agent, AgentSession, inference
+from livekit.agents import Agent, AgentSession, RoomOutputOptions, inference
 from livekit.plugins import openai, tavus
 
 load_dotenv()
 
 server = agents.AgentServer()
+logger = logging.getLogger("hamrah-voice-agent")
 
 
 class PersianAssistant(Agent):
@@ -31,19 +33,27 @@ async def entrypoint(ctx: agents.JobContext) -> None:
     if not os.getenv("OPENROUTER_API_KEY"):
         raise RuntimeError("OPENROUTER_API_KEY is required to run the assistant LLM")
 
+    stt_model = os.getenv("LIVEKIT_STT_MODEL", "deepgram/nova-3")
+    stt_language = os.getenv("LIVEKIT_STT_LANGUAGE", "fa")
+    llm_model = os.getenv("OPENROUTER_MODEL", "openrouter/auto")
+    tts_model = os.getenv("LIVEKIT_TTS_MODEL", "google/gemini-3.8-flash-tts")
+    tts_voice = os.getenv("LIVEKIT_TTS_VOICE", "Kore")
+    tts_language = os.getenv("LIVEKIT_TTS_LANGUAGE", "fa")
+    logger.info(
+        "Voice pipeline models: STT=%s (%s), LLM=OpenRouter/%s, TTS=%s voice=%s (%s)",
+        stt_model, stt_language, llm_model, tts_model, tts_voice, tts_language,
+    )
+
     session = AgentSession(
-        stt=inference.STT(
-            model=os.getenv("LIVEKIT_STT_MODEL", "deepgram/nova-3"),
-            language=os.getenv("LIVEKIT_STT_LANGUAGE", "fa"),
-        ),
+        stt=inference.STT(model=stt_model, language=stt_language),
         llm=openai.LLM.with_openrouter(
-            model=os.getenv("OPENROUTER_MODEL", "openrouter/auto"),
+            model=llm_model,
             app_name="Hamrah Persian Voice Assistant",
         ),
         tts=inference.TTS(
-            model=os.getenv("LIVEKIT_TTS_MODEL", "google/gemini-3.8-flash-tts"),
-            voice=os.getenv("LIVEKIT_TTS_VOICE", "Kore"),
-            language=os.getenv("LIVEKIT_TTS_LANGUAGE", "fa"),
+            model=tts_model,
+            voice=tts_voice,
+            language=tts_language,
         ),
     )
 
@@ -52,26 +62,56 @@ async def entrypoint(ctx: agents.JobContext) -> None:
         avatar_options["face_id"] = os.environ["TAVUS_FACE_ID"]
     avatar = tavus.AvatarSession(**avatar_options)
     await avatar.start(session, room=ctx.room)
+    # Wait until Tavus has joined and published video before the first TTS turn.
+    await avatar.wait_for_join(timeout=30)
+
+    async def publish_room_message(message: dict) -> None:
+        try:
+            await ctx.room.local_participant.publish_data(
+                json.dumps(message, ensure_ascii=False),
+                reliable=True,
+                topic="transcript",
+            )
+        except Exception:
+            logger.warning("Could not publish conversation text to the browser", exc_info=True)
 
     async def publish_user_transcript(event) -> None:
         text = (event.transcript or "").strip()
-        if not text:
-            return
-        payload = json.dumps(
-            {"type": "user_transcript", "text": text, "final": event.is_final},
-            ensure_ascii=False,
-        )
-        await ctx.room.local_participant.publish_data(
-            payload,
-            reliable=True,
-            topic="transcript",
-        )
+        if text:
+            await publish_room_message(
+                {"type": "user_transcript", "text": text, "final": event.is_final}
+            )
 
     @session.on("user_input_transcribed")
     def on_user_input_transcribed(event) -> None:
         asyncio.create_task(publish_user_transcript(event))
 
-    await session.start(agent=PersianAssistant(), room=ctx.room)
+    @session.on("error")
+    def on_session_error(event) -> None:
+        # Identifies whether a failed turn came from the LLM, STT, or TTS.
+        logger.error("AgentSession %s error: %s", event.source, event.error)
+
+    async def publish_assistant_reply(text: str) -> None:
+        await publish_room_message({"type": "assistant_reply", "text": text})
+
+    @session.on("conversation_item_added")
+    def on_conversation_item_added(event) -> None:
+        item = event.item
+        if getattr(item, "role", None) == "assistant":
+            text = (getattr(item, "text_content", "") or "").strip()
+            logger.info("LLM produced assistant text (%d chars)", len(text))
+            if text:
+                asyncio.create_task(publish_assistant_reply(text))
+
+    @session.on("agent_state_changed")
+    def on_agent_state_changed(event) -> None:
+        logger.info("Assistant state: %s -> %s", event.old_state, event.new_state)
+
+    await session.start(
+        agent=PersianAssistant(),
+        room=ctx.room,
+        room_output_options=RoomOutputOptions(audio_enabled=False),
+    )
 
     try:
         metadata = json.loads(ctx.job.metadata or "{}")
@@ -86,4 +126,5 @@ async def entrypoint(ctx: agents.JobContext) -> None:
 
 
 if __name__ == "__main__":
+    logging.basicConfig(level=os.getenv("LOG_LEVEL", "INFO"))
     agents.cli.run_app(server)
