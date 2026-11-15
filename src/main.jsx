@@ -12,10 +12,13 @@ function App() {
   const [health, setHealth] = useState(null);
   const [openingLine, setOpeningLine] = useState('');
   const [muted, setMuted] = useState(false);
+  const [transcriptLines, setTranscriptLines] = useState([]);
+  const [draftTranscript, setDraftTranscript] = useState('');
   const [assistantVideo, setAssistantVideo] = useState(null);
   const [showSettings, setShowSettings] = useState(false);
   const roomRef = useRef(null);
   const videoRef = useRef(null);
+  const transcriptRef = useRef(null);
 
   useEffect(() => {
     fetch('/api/health').then((r) => r.json()).then(setHealth).catch(() => setHealth({ configured: false }));
@@ -26,6 +29,10 @@ function App() {
     assistantVideo.attach(videoRef.current);
     return () => assistantVideo.detach(videoRef.current);
   }, [assistantVideo]);
+
+  useEffect(() => {
+    if (transcriptRef.current) transcriptRef.current.scrollTop = transcriptRef.current.scrollHeight;
+  }, [transcriptLines, draftTranscript]);
 
   async function startConversation() {
     setPhase('connecting');
@@ -40,6 +47,22 @@ function App() {
       const { Room, RoomEvent, Track } = await import('livekit-client');
       const room = new Room({ adaptiveStream: true, dynacast: true });
       roomRef.current = room;
+      setTranscriptLines([]);
+      setDraftTranscript('');
+      room.on(RoomEvent.DataReceived, (payload) => {
+        try {
+          const message = JSON.parse(new TextDecoder().decode(payload));
+          if (message.type !== 'user_transcript' || typeof message.text !== 'string') return;
+          if (message.final) {
+            setTranscriptLines((lines) => [...lines, { id: `${Date.now()}-${Math.random()}`, text: message.text }].slice(-40));
+            setDraftTranscript('');
+          } else {
+            setDraftTranscript(message.text);
+          }
+        } catch (parseError) {
+          console.warn('Could not parse transcript data packet', parseError);
+        }
+      });
       room.on(RoomEvent.TrackSubscribed, (track, _publication, participant) => {
         if (track.kind === Track.Kind.Video && participant.identity !== room.localParticipant.identity) setAssistantVideo(track);
       });
@@ -134,13 +157,26 @@ function App() {
 
           <aside className="side-panel">
             <div className="side-heading"><div><span className="side-kicker">جلسه‌ی جدید</span><h2>با چی کمکت کنم؟</h2></div><span className="sparkle-bubble"><Sparkles size={17}/></span></div>
-            <p className="side-description">از یک سؤال ساده تا یک گفتگوی طولانی؛ از همین‌جا شروع کن.</p>
-            <div className="suggestion-label">شاید این‌ها شروع خوبی باشند</div>
-            <div className="suggestions">
-              <button className="suggestion" onClick={() => setOpeningLine('می‌تونی برای امروز یک برنامه‌ی خوب بهم پیشنهاد بدی؟')}><span className="suggestion-emoji">☀️</span><span>برای امروز برنامه‌ریزی کنیم</span><ArrowUpLeft size={15}/></button>
-              <button className="suggestion" onClick={() => setOpeningLine('یک موضوع جالب بهم یاد بده.')}><span className="suggestion-emoji">💡</span><span>یه چیز تازه یادم بده</span><ArrowUpLeft size={15}/></button>
-              <button className="suggestion" onClick={() => setOpeningLine('می‌خوام کمی گپ بزنیم.')}><span className="suggestion-emoji">💬</span><span>فقط یکم گپ بزنیم</span><ArrowUpLeft size={15}/></button>
-            </div>
+            <p className="side-description">{isLive ? 'متنی که از حرف‌هایت تشخیص داده می‌شود، همین‌جا نمایش داده می‌شود.' : 'از یک سؤال ساده تا یک گفتگوی طولانی؛ از همین‌جا شروع کن.'}</p>
+            {isLive ? (
+              <>
+                <div className="suggestion-label">رونویسی زنده‌ی صحبت‌های شما</div>
+                <div className="transcript-box" ref={transcriptRef} aria-live="polite" aria-label="متن تشخیص‌داده‌شده از صحبت‌های شما">
+                  {transcriptLines.length === 0 && !draftTranscript && <div className="transcript-empty"><span className="online-indicator"/>منتظر اولین جمله‌ات هستم...</div>}
+                  {transcriptLines.map((line) => <div className="transcript-line" key={line.id}><span>شما</span><p>{line.text}</p></div>)}
+                  {draftTranscript && <div className="transcript-line transcript-partial"><span>در حال تشخیص</span><p>{draftTranscript}</p></div>}
+                </div>
+              </>
+            ) : (
+              <>
+                <div className="suggestion-label">شاید این‌ها شروع خوبی باشند</div>
+                <div className="suggestions">
+                  <button className="suggestion" onClick={() => setOpeningLine('می‌تونی برای امروز یک برنامه‌ی خوب بهم پیشنهاد بدی؟')}><span className="suggestion-emoji">☀️</span><span>برای امروز برنامه‌ریزی کنیم</span><ArrowUpLeft size={15}/></button>
+                  <button className="suggestion" onClick={() => setOpeningLine('یک موضوع جالب بهم یاد بده.')}><span className="suggestion-emoji">💡</span><span>یه چیز تازه یادم بده</span><ArrowUpLeft size={15}/></button>
+                  <button className="suggestion" onClick={() => setOpeningLine('می‌خوام کمی گپ بزنیم.')}><span className="suggestion-emoji">💬</span><span>فقط یکم گپ بزنیم</span><ArrowUpLeft size={15}/></button>
+                </div>
+              </>
+            )}
             <div className="divider"/>
             <label className="input-label" htmlFor="opening-line">یا با یک جمله شروع کن <span>اختیاری</span></label>
             <div className="message-input-wrap"><input id="opening-line" value={openingLine} onChange={(e) => setOpeningLine(e.target.value)} onKeyDown={(e) => e.key === 'Enter' && !isLive && startConversation()} placeholder="مثلاً: امروز حالم خوب نیست..." disabled={isLive || phase === 'connecting'}/><Mic size={17} className="input-mic"/></div>
