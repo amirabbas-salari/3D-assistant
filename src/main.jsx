@@ -150,27 +150,8 @@ function App() {
 
   return (
     <div className="app-shell" dir="rtl">
-      <header className="topbar">
-        <a className="brand" href="#home" aria-label="همراه">
-          <span className="brand-mark"><AudioLines size={21} strokeWidth={2.2} /></span>
-          <span className="brand-name">همراه<span className="brand-dot">.</span></span>
-        </a>
-        <nav className="top-nav"><a className="nav-active" href="#talk">گفتگوی من</a><a href="#about">درباره همراه</a></nav>
-        <div className="top-actions">
-          <span className="privacy-pill"><ShieldCheck size={15} /> گفتگوی خصوصی</span>
-          <button className="icon-button settings-button" aria-label="تنظیمات" onClick={() => setShowSettings(!showSettings)}><Settings2 size={19}/></button>
-          {showSettings && <div className="settings-pop"><strong>تنظیمات اتصال</strong><p>آواتار با Tavus، STT/TTS فارسی با LiveKit و LLM با OpenRouter اجرا می‌شود. کلیدها فقط روی سرور می‌مانند.</p><div className="settings-state"><span className={health?.configured ? 'status-dot green' : 'status-dot'} />{health?.configured ? 'پیکربندی کامل است' : 'تنظیمات سرویس‌ها ناقص است'}</div></div>}
-        </div>
-      </header>
-
       <main className="workspace" id="talk">
-        <section className="intro">
-          <div className="eyebrow"><span className="eyebrow-line"/> دستیار هوشمند فارسی <Sparkles size={14}/></div>
-          <h1>یک گفتگوی واقعی،<br/><span>با همراه.</span></h1>
-          <p className="intro-copy">حرف بزن، سؤال بپرس، یا فقط فکرهایت را با صدای بلند بگو.<br className="desktop-break"/> همراه اینجاست تا گوش کند و پاسخ بدهد.</p>
-          <div className="intro-trust"><div className="avatar-stack"><span>م</span><span>ن</span><span>ر</span></div><span>همیشه آماده‌ی شنیدن</span><span className="trust-divider"/><span className="online-indicator"/> آنلاین و در دسترس</div>
-        </section>
-
+        <button className="icon-button settings-button" aria-label="تنظیمات" onClick={() => setShowSettings(!showSettings)}><Settings2 size={19}/></button>
         <section className={`call-layout ${isLive ? 'call-layout-live' : ''}`} aria-label="محیط گفتگوی صوتی و تصویری">
           <div className={`video-panel ${isLive ? 'video-panel-live' : ''}`}>
             <div className="panel-topline"><span className="panel-label"><span className={`status-dot ${isLive ? 'green pulse' : ''}`}/>{isLive ? 'در حال گفتگو' : 'فضای گفتگوی تصویری'}</span><button className="icon-button dots-button" aria-label="گزینه‌های بیشتر"><MoreHorizontal size={21}/></button></div>
@@ -242,17 +223,7 @@ function App() {
             <div className="privacy-note"><ShieldCheck size={14}/><span>با شروع تماس، مرورگر برای دسترسی به میکروفون اجازه می‌خواهد.</span></div>
           </aside>
         </section>
-
-        <section className="feature-strip" id="about">
-          <div className="feature"><span className="feature-icon purple"><Mic size={18}/></span><div><strong>گفتگوی صوتی</strong><small>طبیعی، راحت و فارسی</small></div></div>
-          <span className="feature-separator"/>
-          <div className="feature"><span className="feature-icon teal"><Video size={18}/></span><div><strong>همراه تصویری</strong><small>حضور زنده با Tavus</small></div></div>
-          <span className="feature-separator"/>
-          <div className="feature"><span className="feature-icon amber"><ShieldCheck size={18}/></span><div><strong>حریم خصوصی</strong><small>کلیدها امن روی سرور</small></div></div>
-          <a className="help-link" href="https://docs.tavus.io/" target="_blank" rel="noreferrer"><CircleHelp size={16}/> راهنمای راه‌اندازی <ArrowUpLeft size={14}/></a>
-        </section>
       </main>
-      <footer className="footer"><span>ساخته‌شده برای گفتگوهای بهتر <span className="footer-heart">♥</span></span><span>همراه <span className="footer-sep">·</span> نسخه‌ی آزمایشی</span></footer>
     </div>
   );
 }
