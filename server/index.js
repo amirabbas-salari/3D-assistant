@@ -13,7 +13,8 @@ app.use(express.json({ limit: '32kb' }));
 function isConfigured() {
   return Boolean(
     process.env.LIVEKIT_URL && process.env.LIVEKIT_API_KEY && process.env.LIVEKIT_API_SECRET &&
-    process.env.TAVUS_API_KEY && process.env.TAVUS_PAL_ID && process.env.GOOGLE_API_KEY,
+    process.env.TAVUS_API_KEY && process.env.TAVUS_PAL_ID &&
+    process.env.CLOUDFLARE_ACCOUNT_ID && process.env.CLOUDFLARE_API_TOKEN,
   );
 }
 
@@ -22,9 +23,9 @@ app.get('/api/health', (_req, res) => {
     ok: true,
     configured: isConfigured(),
     agentName: process.env.LIVEKIT_AGENT_NAME || 'hamrah-agent',
-    llmProvider: 'Google AI Studio (Gemini API)',
-    llmModel: (process.env.GOOGLE_LLM_MODEL || process.env.LIVEKIT_LLM_MODEL || 'gemini-3.8-flash').replace('google/', ''),
-    googleApiKeyConfigured: Boolean(process.env.GOOGLE_API_KEY),
+    llmProvider: 'Cloudflare Workers AI',
+    llmModel: process.env.CLOUDFLARE_LLM_MODEL || '@cf/meta/llama-3.3-70b-instruct-fp8-fast',
+    cloudflareConfigured: Boolean(process.env.CLOUDFLARE_ACCOUNT_ID && process.env.CLOUDFLARE_API_TOKEN),
     sttModel: process.env.LIVEKIT_STT_MODEL || 'deepgram/nova-3',
     sttLanguage: process.env.LIVEKIT_STT_LANGUAGE || 'fa',
     ttsModel: process.env.LIVEKIT_TTS_MODEL || 'google/gemini-3.8-flash-tts',
@@ -35,7 +36,7 @@ app.get('/api/health', (_req, res) => {
 
 app.post('/api/session', async (req, res) => {
   if (!isConfigured()) {
-    return res.status(503).json({ error: 'برای شروع، اطلاعات LiveKit و Tavus و کلید Google AI Studio (GOOGLE_API_KEY) را در فایل .env تنظیم کنید.' });
+    return res.status(503).json({ error: 'برای شروع، اطلاعات LiveKit و Tavus و Cloudflare Workers AI (CLOUDFLARE_ACCOUNT_ID و CLOUDFLARE_API_TOKEN) را در فایل .env تنظیم کنید.' });
   }
 
   const roomName = `hamrah-${randomUUID().slice(0, 12)}`;
