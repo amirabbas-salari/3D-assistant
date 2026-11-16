@@ -1,14 +1,15 @@
 # همراه — دستیار صوتی و تصویری فارسی
 
-دستیار مکالمه‌ای زنده با رابط فارسی راست‌چین، STT/LLM/TTS از LiveKit Inference و آواتار ویدیویی Tavus که در همان LiveKit room حضور دارد و با صدا همگام می‌شود. مدل‌ها به‌صورت پیش‌فرض `deepgram/nova-3` با زبان `fa` برای STT، `google/gemini-3.8-flash` برای LLM، و `google/gemini-3.8-flash-tts` با صدای `Kore` و زبان `fa` برای TTS هستند.
+دستیار مکالمه‌ای زنده با رابط فارسی راست‌چین، LLM از Gemini API در Google AI Studio، STT/TTS از LiveKit Inference و آواتار ویدیویی Tavus که در همان LiveKit room حضور دارد و با صدا همگام می‌شود. مدل‌ها به‌صورت پیش‌فرض `deepgram/nova-3` با زبان `fa` برای STT، `gemini-3.8-flash` برای LLM، و `google/gemini-3.8-flash-tts` با صدای `Kore` و زبان `fa` برای TTS هستند.
 
-کلیدهای سرویس فقط روی سرور/API و Agent نگهداری می‌شوند. مرورگر تنها یک توکن کوتاه‌عمرِ محدود به همان room دریافت می‌کند.
+کلیدهای Google AI Studio، LiveKit و Tavus فقط روی سرور/API و Agent نگهداری می‌شوند. مرورگر تنها یک توکن کوتاه‌عمرِ محدود به همان room دریافت می‌کند.
 
 ## پیش‌نیازها
 
 - Node.js 18+
 - Python 3.10+
-- پروژه‌ی LiveKit Cloud با Inference فعال و دسترسی به مدل‌های انتخابی
+- کلید Gemini API از [Google AI Studio](https://aistudio.google.com/api-keys)
+- پروژه‌ی LiveKit Cloud با Inference فعال و دسترسی به مدل‌های انتخابی STT/TTS
 - حساب Tavus با PAL و Face قابل استفاده در اتصال LiveKit
 
 ## راه‌اندازی
@@ -18,7 +19,7 @@ npm install
 cp .env.example .env
 ```
 
-مقادیر LiveKit و Tavus را در `.env` وارد کنید. برای LLM/STT/TTS از LiveKit Inference استفاده می‌شود و نیازی به کلید جداگانه‌ی OpenRouter نیست. سپس agent پایتون را در یک ترمینال نصب و اجرا کنید:
+در `.env` مقادیر LiveKit و Tavus را وارد کنید و `GOOGLE_API_KEY` را با کلید ساخته‌شده در Google AI Studio پر کنید. LLM از Gemini API مستقیم و با این کلید استفاده می‌کند؛ STT و TTS همچنان از LiveKit Inference استفاده می‌کنند. کلید Google را فقط در `.env` سمت سرور/Agent نگه دارید و هرگز در کد مرورگر قرار ندهید. سپس Agent پایتون را در یک ترمینال نصب و اجرا کنید:
 
 ```bash
 python -m venv .venv
@@ -45,12 +46,12 @@ NODE_ENV=production npm start
 1. در LiveKit Cloud یک project بسازید و `LIVEKIT_URL`, `LIVEKIT_API_KEY`, `LIVEKIT_API_SECRET` را در `.env` قرار دهید.
 2. در Tavus یک PAL بسازید که `pipeline_mode` آن `echo` و `layers.transport.transport_type` آن `livekit` باشد. شناسه‌ی PAL و API key را در `TAVUS_PAL_ID` و `TAVUS_API_KEY` بگذارید. شناسه‌ی Face/Replica را در `TAVUS_FACE_ID` تنظیم کنید.
 3. Agent به‌صورت صریح با نام `hamrah-agent` dispatch می‌شود؛ همین نام را با `LIVEKIT_AGENT_NAME` هماهنگ نگه دارید. Agent را با `python agent.py dev` اجرا کنید.
-4. مدل‌های فارسی پیش‌فرض:
-   - STT: `deepgram/nova-3` با `fa`
-   - TTS: `google/gemini-3.8-flash-tts` با صدای `Kore` و `fa`
-   - LLM: `google/gemini-3.8-flash` از LiveKit Inference.
+4. مدل‌های پیش‌فرض:
+   - STT: `deepgram/nova-3` با `fa` از LiveKit Inference
+   - TTS: `google/gemini-3.8-flash-tts` با صدای `Kore` و `fa` از LiveKit Inference
+   - LLM: `gemini-3.8-flash` از Gemini API در Google AI Studio.
 
-   برای تغییر مدل‌ها از `LIVEKIT_STT_MODEL`, `LIVEKIT_STT_LANGUAGE`, `LIVEKIT_LLM_MODEL`, `LIVEKIT_TTS_MODEL`, `LIVEKIT_TTS_VOICE` و `LIVEKIT_TTS_LANGUAGE` استفاده کنید. کلیدهای LiveKit فقط در `.env` سمت سرور/Agent نگهداری می‌شوند. پشتیبانی زبان/voice و دسترسی به مدل‌ها ممکن است به حساب LiveKit و مدل انتخابی وابسته باشد.
+   برای تغییر مدل‌ها از `LIVEKIT_STT_MODEL`, `LIVEKIT_STT_LANGUAGE`, `GOOGLE_LLM_MODEL`, `LIVEKIT_TTS_MODEL`, `LIVEKIT_TTS_VOICE` و `LIVEKIT_TTS_LANGUAGE` استفاده کنید. کلید `GOOGLE_API_KEY` و کلیدهای LiveKit فقط در `.env` سمت سرور/Agent نگهداری می‌شوند. دسترسی و نام مدل‌ها به وضعیت دسترسی حساب Google AI Studio یا LiveKit وابسته است.
 
 Agent درخواست راه‌اندازی Tavus را می‌فرستد و AgentSession را شروع می‌کند؛ انتظار برای ترک ویدیوی Tavus در پس‌زمینه است. صفحه‌ی نمونه چت متنی مستقیم هم دارد: اگر اجازه‌ی میکروفون رد شود یا ورودی صوتی در دسترس نباشد، کاربر می‌تواند متن بفرستد؛ پاسخ متنی حتی در صورت خطای TTS در چت نمایش داده می‌شود. گزارش نشست، رخدادهای مرورگر/API و لاگ‌های Agent (از جمله خطاها و جزئیات traceback) را داخل صفحه نمایش می‌دهد؛ گزارش ممکن است شامل متن گفتگو باشد و فقط برای عیب‌یابی همین نشست است. اگر پخش خودکار مرورگر مسدود باشد، دکمه‌ی فعال‌سازی صدا را بزنید. STT پیش‌فرض `deepgram/nova-3` با زبان `fa` است (قابل تغییر با `LIVEKIT_STT_MODEL` و `LIVEKIT_STT_LANGUAGE`).
 
@@ -59,4 +60,4 @@ Agent درخواست راه‌اندازی Tavus را می‌فرستد و Agent
 - `GET /api/health` — وضعیت پیکربندی، بدون افشای رازها
 - `POST /api/session` — ساخت LiveKit room، dispatch کردن Agent و برگرداندن JWT کوتاه‌عمر برای همان room
 
-`agent.py` به LiveKit وصل می‌شود، STT/LLM/TTS فارسی را اجرا می‌کند و با پلاگین رسمی Tavus، آواتار را به همان room اضافه می‌کند. متن تشخیص‌داده‌شده از صدای کاربر از رویداد `user_input_transcribed` دریافت و به‌صورت data packet زنده به رابط فرستاده می‌شود؛ متن‌های نهایی و متن موقتِ در حال تشخیص در پنل گفتگو نمایش داده می‌شوند.
+`agent.py` به LiveKit وصل می‌شود، STT/TTS را از LiveKit Inference و LLM را از Google AI Studio اجرا می‌کند و با پلاگین رسمی Tavus، آواتار را به همان room اضافه می‌کند. متن تشخیص‌داده‌شده از صدای کاربر از رویداد `user_input_transcribed` دریافت و به‌صورت data packet زنده به رابط فرستاده می‌شود؛ متن‌های نهایی و متن موقتِ در حال تشخیص در پنل گفتگو نمایش داده می‌شوند.
