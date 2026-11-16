@@ -1,6 +1,6 @@
 # همراه — دستیار صوتی و تصویری فارسی
 
-دستیار مکالمه‌ای زنده با رابط فارسی راست‌چین، STT/TTS فارسی از LiveKit Inference، LLM از OpenRouter و آواتار ویدیویی Tavus که در همان LiveKit room حضور دارد و با صدا همگام می‌شود. STT اولیه `deepgram/nova-3` با زبان `fa` و TTS اولیه `google/gemini-3.8-flash-tts` با صدای `Kore` و زبان `fa` است. مدل زبانی با `OPENROUTER_MODEL` انتخاب می‌شود (پیش‌فرض `openrouter/auto`).
+دستیار مکالمه‌ای زنده با رابط فارسی راست‌چین، STT/LLM/TTS از LiveKit Inference و آواتار ویدیویی Tavus که در همان LiveKit room حضور دارد و با صدا همگام می‌شود. مدل‌ها به‌صورت پیش‌فرض `deepgram/nova-3` با زبان `fa` برای STT، `google/gemini-3.8-flash` برای LLM، و `google/gemini-3.8-flash-tts` با صدای `Kore` و زبان `fa` برای TTS هستند.
 
 کلیدهای سرویس فقط روی سرور/API و Agent نگهداری می‌شوند. مرورگر تنها یک توکن کوتاه‌عمرِ محدود به همان room دریافت می‌کند.
 
@@ -8,9 +8,8 @@
 
 - Node.js 18+
 - Python 3.10+
-- حساب LiveKit Cloud با Inference فعال
-- حساب Tavus و Face/Replica قابل استفاده با LiveKit
-- کلید API در OpenRouter و دسترسی به مدل انتخابی
+- پروژه‌ی LiveKit Cloud با Inference فعال و دسترسی به مدل‌های انتخابی
+- حساب Tavus با PAL و Face قابل استفاده در اتصال LiveKit
 
 ## راه‌اندازی
 
@@ -19,7 +18,7 @@ npm install
 cp .env.example .env
 ```
 
-مقادیر LiveKit، Tavus و `OPENROUTER_API_KEY` را در `.env` وارد کنید. سپس agent پایتون را در یک ترمینال نصب و اجرا کنید:
+مقادیر LiveKit و Tavus را در `.env` وارد کنید. برای LLM/STT/TTS از LiveKit Inference استفاده می‌شود و نیازی به کلید جداگانه‌ی OpenRouter نیست. سپس agent پایتون را در یک ترمینال نصب و اجرا کنید:
 
 ```bash
 python -m venv .venv
@@ -49,9 +48,9 @@ NODE_ENV=production npm start
 4. مدل‌های فارسی پیش‌فرض:
    - STT: `deepgram/nova-3` با `fa`
    - TTS: `google/gemini-3.8-flash-tts` با صدای `Kore` و `fa`
-   - LLM: مدل انتخابی OpenRouter؛ پیش‌فرض `openrouter/auto`. شناسه‌ی مدل‌هایی مانند `provider/model` را از فهرست OpenRouter انتخاب کنید.
+   - LLM: `google/gemini-3.8-flash` از LiveKit Inference.
 
-   برای تغییر مدل‌ها از `LIVEKIT_STT_MODEL`, `LIVEKIT_STT_LANGUAGE`, `LIVEKIT_TTS_MODEL`, `LIVEKIT_TTS_VOICE`, `LIVEKIT_TTS_LANGUAGE` و `OPENROUTER_MODEL` استفاده کنید. کلید OpenRouter فقط در `.env` سمت سرور/Agent نگهداری می‌شود. پشتیبانی زبان/voice و دسترسی به مدل‌ها ممکن است به حساب و مدل انتخابی وابسته باشد.
+   برای تغییر مدل‌ها از `LIVEKIT_STT_MODEL`, `LIVEKIT_STT_LANGUAGE`, `LIVEKIT_LLM_MODEL`, `LIVEKIT_TTS_MODEL`, `LIVEKIT_TTS_VOICE` و `LIVEKIT_TTS_LANGUAGE` استفاده کنید. کلیدهای LiveKit فقط در `.env` سمت سرور/Agent نگهداری می‌شوند. پشتیبانی زبان/voice و دسترسی به مدل‌ها ممکن است به حساب LiveKit و مدل انتخابی وابسته باشد.
 
 Agent ابتدا درخواست راه‌اندازی Tavus را می‌فرستد و سپس بدون معطل‌کردن STT، AgentSession را شروع می‌کند؛ پیوستن participant و انتشار ترک ویدیوی Tavus در پس‌زمینه بررسی می‌شود. اگر شروع خود Tavus خطا بدهد، Agent با صدای مستقیم LiveKit به کار ادامه می‌دهد. وقتی Tavus بالا بیاید، TTS به Avatar Worker هدایت می‌شود تا صدا با ویدیو همگام باشد. مرورگر ترک‌های صوتی راه‌دور را پخش می‌کند؛ اگر autoplay مسدود باشد از دکمه‌ی بلندگو یا دکمه‌ی «برای شنیدن صدا بزن» استفاده کنید. پنل گفتگو هم متن پاسخ همراه را کنار گفتار تشخیص‌داده‌شده نشان می‌دهد: اگر متن پاسخ می‌آید ولی صدا نه، LLM جواب داده و ایراد در TTS/ترک صوتی/پخش مرورگر است. خطاهای مدل با منبع `llm` یا `tts` در لاگ Agent ثبت می‌شوند. STT پیش‌فرض `deepgram/nova-3` با زبان `fa` است (قابل تغییر با `LIVEKIT_STT_MODEL` و `LIVEKIT_STT_LANGUAGE`).
 

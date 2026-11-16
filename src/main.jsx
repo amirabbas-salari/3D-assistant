@@ -219,7 +219,7 @@ function App() {
                 {phase === 'connecting' ? <><span className="spinner"/> در حال آماده‌سازی...</> : <><Phone size={17} fill="currentColor"/> شروع گفتگوی صوتی و تصویری <ArrowUpLeft size={17}/></>}
               </button>
             )}
-            {!health?.configured && <div className="setup-hint"><span className="hint-icon"><Settings2 size={15}/></span><span>برای فعال‌سازی گفتگو، کلیدهای LiveKit، Tavus و OpenRouter را در فایل <code>.env</code> تنظیم کن.</span></div>}
+            {!health?.configured && <div className="setup-hint"><span className="hint-icon"><Settings2 size={15}/></span><span>برای فعال‌سازی گفتگو، متغیرهای LiveKit و Tavus را در فایل <code>.env</code> تنظیم کن.</span></div>}
             <div className="privacy-note"><ShieldCheck size={14}/><span>با شروع تماس، مرورگر برای دسترسی به میکروفون اجازه می‌خواهد.</span></div>
           </aside>
         </section>

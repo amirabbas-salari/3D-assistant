@@ -8,7 +8,7 @@ import os
 from dotenv import load_dotenv
 from livekit import agents
 from livekit.agents import Agent, AgentSession, RoomOutputOptions, inference
-from livekit.plugins import openai, tavus
+from livekit.plugins import tavus
 
 load_dotenv()
 
@@ -30,26 +30,25 @@ class PersianAssistant(Agent):
 
 @server.rtc_session(agent_name=os.getenv("LIVEKIT_AGENT_NAME", "hamrah-agent"))
 async def entrypoint(ctx: agents.JobContext) -> None:
-    if not os.getenv("OPENROUTER_API_KEY"):
-        raise RuntimeError("OPENROUTER_API_KEY is required to run the assistant LLM")
-
     stt_model = os.getenv("LIVEKIT_STT_MODEL", "deepgram/nova-3")
     stt_language = os.getenv("LIVEKIT_STT_LANGUAGE", "fa")
-    llm_model = os.getenv("OPENROUTER_MODEL", "openrouter/auto")
+    llm_model = os.getenv("LIVEKIT_LLM_MODEL", "google/gemini-3.8-flash").strip()
+    if llm_model == "google/gemini-2.5-flash":
+        logger.warning(
+            "LIVEKIT_LLM_MODEL=google/gemini-2.5-flash is retired; using google/gemini-3.8-flash"
+        )
+        llm_model = "google/gemini-3.8-flash"
     tts_model = os.getenv("LIVEKIT_TTS_MODEL", "google/gemini-3.8-flash-tts")
     tts_voice = os.getenv("LIVEKIT_TTS_VOICE", "Kore")
     tts_language = os.getenv("LIVEKIT_TTS_LANGUAGE", "fa")
     logger.info(
-        "Voice pipeline models: STT=%s (%s), LLM=OpenRouter/%s, TTS=%s voice=%s (%s)",
+        "Voice pipeline models: STT=%s (%s), LLM=LiveKit Inference/%s, TTS=%s voice=%s (%s)",
         stt_model, stt_language, llm_model, tts_model, tts_voice, tts_language,
     )
 
     session = AgentSession(
         stt=inference.STT(model=stt_model, language=stt_language),
-        llm=openai.LLM.with_openrouter(
-            model=llm_model,
-            app_name="Hamrah Persian Voice Assistant",
-        ),
+        llm=inference.LLM(model=llm_model),
         tts=inference.TTS(
             model=tts_model,
             voice=tts_voice,
