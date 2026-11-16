@@ -13,17 +13,27 @@ app.use(express.json({ limit: '32kb' }));
 function isConfigured() {
   return Boolean(
     process.env.LIVEKIT_URL && process.env.LIVEKIT_API_KEY && process.env.LIVEKIT_API_SECRET &&
-    process.env.TAVUS_API_KEY && process.env.TAVUS_PAL_ID && process.env.OPENROUTER_API_KEY,
+    process.env.TAVUS_API_KEY && process.env.TAVUS_PAL_ID,
   );
 }
 
 app.get('/api/health', (_req, res) => {
-  res.json({ ok: true, configured: isConfigured() });
+  res.json({
+    ok: true,
+    configured: isConfigured(),
+    agentName: process.env.LIVEKIT_AGENT_NAME || 'hamrah-agent',
+    llmModel: process.env.LIVEKIT_LLM_MODEL || 'google/gemini-3.8-flash',
+    sttModel: process.env.LIVEKIT_STT_MODEL || 'deepgram/nova-3',
+    sttLanguage: process.env.LIVEKIT_STT_LANGUAGE || 'fa',
+    ttsModel: process.env.LIVEKIT_TTS_MODEL || 'google/gemini-3.8-flash-tts',
+    ttsVoice: process.env.LIVEKIT_TTS_VOICE || 'Kore',
+    ttsLanguage: process.env.LIVEKIT_TTS_LANGUAGE || 'fa',
+  });
 });
 
 app.post('/api/session', async (req, res) => {
   if (!isConfigured()) {
-    return res.status(503).json({ error: 'برای شروع، اطلاعات LiveKit، Tavus و OpenRouter را در فایل .env تنظیم کنید.' });
+    return res.status(503).json({ error: 'برای شروع، اطلاعات LiveKit و Tavus را در فایل .env تنظیم کنید.' });
   }
 
   const roomName = `hamrah-${randomUUID().slice(0, 12)}`;
@@ -59,7 +69,10 @@ app.post('/api/session', async (req, res) => {
     });
   } catch (error) {
     console.error('Could not start LiveKit session:', error);
-    res.status(502).json({ error: 'ساخت جلسه‌ی صوتی/تصویری ناموفق بود. تنظیمات LiveKit، Agent و Tavus را بررسی کنید.' });
+    res.status(502).json({
+      error: 'ساخت جلسه‌ی صوتی/تصویری ناموفق بود. تنظیمات LiveKit، Agent و Tavus را بررسی کنید.',
+      details: process.env.NODE_ENV === 'production' ? undefined : (error instanceof Error ? error.message : String(error)),
+    });
   }
 });
 

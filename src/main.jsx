@@ -1,8 +1,8 @@
 import React, { useEffect, useRef, useState } from 'react';
 import { createRoot } from 'react-dom/client';
 import {
-  AudioLines, ArrowUpLeft, Check, CircleHelp, Mic, MicOff, MoreHorizontal,
-  Phone, PhoneOff, Settings2, ShieldCheck, Sparkles, Video, Volume2, Waves,
+  Activity, AudioLines, Check, CircleAlert, Copy, Mic, MicOff,
+  Send, Square, Trash2, Video, Volume2, Wifi, WifiOff,
 } from 'lucide-react';
 import './styles.css';
 
@@ -18,24 +18,78 @@ function RemoteAudioOutput({ track }) {
   return <audio ref={audioRef} autoPlay playsInline className="remote-audio-output" />;
 }
 
+function messageTime() {
+  return new Date().toLocaleTimeString('fa-IR', { hour: '2-digit', minute: '2-digit', second: '2-digit' });
+}
+
+function errorMessage(error) {
+  return error instanceof Error ? error.message : String(error || 'خطای نامشخص');
+}
+
 function App() {
   const [phase, setPhase] = useState('idle');
-  const [error, setError] = useState('');
   const [health, setHealth] = useState(null);
-  const [openingLine, setOpeningLine] = useState('');
-  const [muted, setMuted] = useState(false);
-  const [transcriptLines, setTranscriptLines] = useState([]);
+  const [chatMessages, setChatMessages] = useState([]);
+  const [logs, setLogs] = useState([]);
+  const [draft, setDraft] = useState('');
   const [draftTranscript, setDraftTranscript] = useState('');
   const [assistantVideo, setAssistantVideo] = useState(null);
   const [assistantAudioTracks, setAssistantAudioTracks] = useState([]);
+  const [micEnabled, setMicEnabled] = useState(false);
   const [audioNeedsGesture, setAudioNeedsGesture] = useState(false);
-  const [showSettings, setShowSettings] = useState(false);
   const roomRef = useRef(null);
   const videoRef = useRef(null);
-  const transcriptRef = useRef(null);
+  const chatRef = useRef(null);
+  const logRef = useRef(null);
+
+  function addLog(level, message, details = '') {
+    setLogs((current) => [...current, {
+      id: `${Date.now()}-${Math.random()}`,
+      time: messageTime(),
+      level: String(level || 'info').toLowerCase(),
+      message: String(message || ''),
+      details: details ? String(details) : '',
+    }]);
+  }
+
+  function addChat(role, text, source = '') {
+    if (!String(text || '').trim()) return;
+    setChatMessages((current) => [...current, {
+      id: `${Date.now()}-${Math.random()}`,
+      role,
+      text: String(text),
+      source,
+      time: messageTime(),
+    }]);
+  }
 
   useEffect(() => {
-    fetch('/api/health').then((r) => r.json()).then(setHealth).catch(() => setHealth({ configured: false }));
+    fetch('/api/health')
+      .then(async (response) => {
+        const data = await response.json();
+        if (!response.ok) throw new Error(data.error || `HTTP ${response.status}`);
+        setHealth(data);
+        addLog(data.configured ? 'info' : 'warning', 'بررسی پیکربندی API انجام شد', JSON.stringify(data, null, 2));
+      })
+      .catch((error) => {
+        setHealth({ configured: false });
+        addLog('error', 'دسترسی به API ناموفق بود', errorMessage(error));
+      });
+  }, []);
+
+  useEffect(() => {
+    const onWindowError = (event) => {
+      addLog('error', 'خطای اجرا در مرورگر', event.message || 'خطای JavaScript');
+    };
+    const onUnhandledRejection = (event) => {
+      addLog('error', 'وعده‌ی ناموفق در مرورگر', errorMessage(event.reason));
+    };
+    window.addEventListener('error', onWindowError);
+    window.addEventListener('unhandledrejection', onUnhandledRejection);
+    return () => {
+      window.removeEventListener('error', onWindowError);
+      window.removeEventListener('unhandledrejection', onUnhandledRejection);
+    };
   }, []);
 
   useEffect(() => {
@@ -45,186 +99,272 @@ function App() {
   }, [assistantVideo]);
 
   useEffect(() => {
-    if (transcriptRef.current) transcriptRef.current.scrollTop = transcriptRef.current.scrollHeight;
-  }, [transcriptLines, draftTranscript]);
+    if (chatRef.current) chatRef.current.scrollTop = chatRef.current.scrollHeight;
+  }, [chatMessages, draftTranscript]);
 
-  async function startConversation() {
+  useEffect(() => {
+    if (logRef.current) logRef.current.scrollTop = logRef.current.scrollHeight;
+  }, [logs]);
+
+  async function startSession() {
+    if (phase !== 'idle') return;
     setPhase('connecting');
-    setError('');
+    addLog('info', 'درخواست ایجاد جلسه ارسال شد');
+    let room;
     try {
       const response = await fetch('/api/session', {
-        method: 'POST', headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ message: openingLine }),
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({}),
       });
       const data = await response.json();
-      if (!response.ok) throw new Error(data.error || 'شروع گفتگو با خطا روبه‌رو شد.');
+      if (!response.ok) {
+        const detail = [data.error, data.details].filter(Boolean).join('\n');
+        throw new Error(detail || `ساخت جلسه ناموفق بود (HTTP ${response.status})`);
+      }
+
       const { Room, RoomEvent, Track } = await import('livekit-client');
-      const room = new Room({ adaptiveStream: true, dynacast: true });
+      room = new Room({ adaptiveStream: true, dynacast: true });
       roomRef.current = room;
-      setTranscriptLines([]);
-      setDraftTranscript('');
+
       room.on(RoomEvent.DataReceived, (payload) => {
         try {
-          const message = JSON.parse(new TextDecoder().decode(payload));
-          if (typeof message.text !== 'string') return;
-          if (message.type === 'user_transcript') {
-            if (message.final) {
-              setTranscriptLines((lines) => [...lines, { id: `${Date.now()}-${Math.random()}`, role: 'user', text: message.text }].slice(-40));
+          const packet = JSON.parse(new TextDecoder().decode(payload));
+          if (packet.type === 'system_log') {
+            addLog(packet.level, packet.message, packet.details || '');
+          } else if (packet.type === 'user_transcript' && typeof packet.text === 'string') {
+            if (packet.final) {
+              addChat('user', packet.text, 'voice');
               setDraftTranscript('');
             } else {
-              setDraftTranscript(message.text);
+              setDraftTranscript(packet.text);
             }
-          } else if (message.type === 'assistant_reply') {
-            setTranscriptLines((lines) => [...lines, { id: `${Date.now()}-${Math.random()}`, role: 'assistant', text: message.text }].slice(-40));
+          } else if (packet.type === 'assistant_reply' && typeof packet.text === 'string') {
+            addChat('assistant', packet.text, 'agent');
+            addLog('info', 'پاسخ متنی Agent دریافت شد', `${packet.text.length} نویسه`);
           }
-        } catch (parseError) {
-          console.warn('Could not parse transcript data packet', parseError);
+        } catch (error) {
+          addLog('warning', 'بسته‌ی داده قابل خواندن نبود', errorMessage(error));
         }
       });
-      room.on(RoomEvent.TrackSubscribed, (track, _publication, participant) => {
-        if (participant.identity === room.localParticipant.identity) return;
-        if (track.kind === Track.Kind.Video) setAssistantVideo(track);
-        if (track.kind === Track.Kind.Audio) setAssistantAudioTracks((tracks) => tracks.includes(track) ? tracks : [...tracks, track]);
+
+      room.on(RoomEvent.ParticipantConnected, (participant) => {
+        addLog('info', 'شرکت‌کننده به اتاق پیوست', participant.identity);
       });
-      room.on(RoomEvent.TrackUnsubscribed, (track) => {
+      room.on(RoomEvent.ParticipantDisconnected, (participant) => {
+        addLog('warning', 'شرکت‌کننده از اتاق خارج شد', participant.identity);
+      });
+      room.on(RoomEvent.TrackSubscribed, (track, publication, participant) => {
+        if (track.kind === Track.Kind.Video) {
+          setAssistantVideo(track);
+          addLog('info', 'ترک ویدیویی دریافت شد', `${participant.identity} · ${publication.source}`);
+        } else if (track.kind === Track.Kind.Audio) {
+          setAssistantAudioTracks((current) => current.includes(track) ? current : [...current, track]);
+          addLog('info', 'ترک صوتی دریافت شد', `${participant.identity} · ${publication.source}`);
+        }
+      });
+      room.on(RoomEvent.TrackUnsubscribed, (track, _publication, participant) => {
         if (track.kind === Track.Kind.Video) setAssistantVideo(null);
-        if (track.kind === Track.Kind.Audio) setAssistantAudioTracks((tracks) => tracks.filter((item) => item !== track));
+        if (track.kind === Track.Kind.Audio) setAssistantAudioTracks((current) => current.filter((item) => item !== track));
+        addLog('warning', 'ترک از اتاق لغو شد', `${participant.identity} · ${track.kind}`);
       });
       room.on(RoomEvent.AudioPlaybackStatusChanged, () => {
-        setAudioNeedsGesture(!room.canPlaybackAudio);
+        const blocked = !room.canPlaybackAudio;
+        setAudioNeedsGesture(blocked);
+        addLog(blocked ? 'warning' : 'info', blocked ? 'مرورگر پخش خودکار صدا را مسدود کرد' : 'پخش صدا فعال است');
       });
+      room.on(RoomEvent.Disconnected, (reason) => {
+        addLog('warning', 'اتصال LiveKit قطع شد', String(reason || 'بدون جزئیات'));
+      });
+
       await room.connect(data.serverUrl, data.token);
-      await room.localParticipant.setMicrophoneEnabled(true);
+      setPhase('connected');
+      addLog('success', 'به اتاق LiveKit متصل شدیم', `room=${data.roomName || 'unknown'} · agent=${health?.agentName || 'configured agent'}`);
+
+      // Microphone is optional: a permission/device error must not disable text chat.
+      try {
+        await room.localParticipant.setMicrophoneEnabled(true);
+        setMicEnabled(true);
+        addLog('success', 'میکروفون فعال شد');
+      } catch (error) {
+        setMicEnabled(false);
+        addLog('warning', 'میکروفون در دسترس نیست؛ چت متنی همچنان فعال است', errorMessage(error));
+      }
       try {
         await room.startAudio();
         setAudioNeedsGesture(!room.canPlaybackAudio);
-      } catch {
+      } catch (error) {
         setAudioNeedsGesture(true);
+        addLog('warning', 'فعال‌سازی پخش صدا نیاز به تعامل کاربر دارد', errorMessage(error));
       }
+
       for (const participant of room.remoteParticipants.values()) {
         for (const publication of participant.videoTrackPublications.values()) {
           if (publication.track) setAssistantVideo(publication.track);
         }
         for (const publication of participant.audioTrackPublications.values()) {
-          if (publication.track) setAssistantAudioTracks((tracks) => tracks.includes(publication.track) ? tracks : [...tracks, publication.track]);
+          if (publication.track) setAssistantAudioTracks((current) => current.includes(publication.track) ? current : [...current, publication.track]);
         }
       }
-      setPhase('live');
-    } catch (e) {
-      roomRef.current?.disconnect();
+    } catch (error) {
+      room?.disconnect();
       roomRef.current = null;
-      setAssistantAudioTracks([]);
-      setAudioNeedsGesture(false);
-      setError(e.message || 'ارتباط برقرار نشد. دوباره تلاش کنید.');
       setPhase('idle');
+      setMicEnabled(false);
+      setAssistantVideo(null);
+      setAssistantAudioTracks([]);
+      addLog('error', 'شروع جلسه ناموفق بود', errorMessage(error));
     }
   }
 
-  function endConversation() {
+  function endSession() {
+    addLog('info', 'درخواست پایان جلسه');
     roomRef.current?.disconnect();
     roomRef.current = null;
+    setPhase('idle');
+    setMicEnabled(false);
     setAssistantVideo(null);
     setAssistantAudioTracks([]);
     setAudioNeedsGesture(false);
-    setPhase('idle');
-    setMuted(false);
-    setOpeningLine('');
+    setDraftTranscript('');
   }
 
-  async function toggleMute() {
-    const nextMuted = !muted;
-    await roomRef.current?.localParticipant.setMicrophoneEnabled(!nextMuted);
-    setMuted(nextMuted);
+  async function toggleMic() {
+    const room = roomRef.current;
+    if (!room) return;
+    try {
+      await room.localParticipant.setMicrophoneEnabled(!micEnabled);
+      setMicEnabled(!micEnabled);
+      addLog('info', micEnabled ? 'میکروفون خاموش شد' : 'میکروفون روشن شد');
+    } catch (error) {
+      addLog('error', 'تغییر وضعیت میکروفون ناموفق بود', errorMessage(error));
+    }
   }
 
   async function enableAudioPlayback() {
     try {
       await roomRef.current?.startAudio();
-      setAudioNeedsGesture(Boolean(roomRef.current && !roomRef.current.canPlaybackAudio));
-    } catch {
+      const stillBlocked = Boolean(roomRef.current && !roomRef.current.canPlaybackAudio);
+      setAudioNeedsGesture(stillBlocked);
+      addLog(stillBlocked ? 'warning' : 'success', stillBlocked ? 'پخش صدا هنوز مسدود است' : 'پخش صدا فعال شد');
+    } catch (error) {
       setAudioNeedsGesture(true);
+      addLog('error', 'فعال‌سازی صدا ناموفق بود', errorMessage(error));
     }
   }
 
-  const isLive = phase === 'live';
+  async function sendText(event) {
+    event.preventDefault();
+    const text = draft.trim().slice(0, 4000);
+    const room = roomRef.current;
+    if (!text || !room || phase !== 'connected') return;
+    try {
+      const payload = new TextEncoder().encode(JSON.stringify({ type: 'chat_input', text }));
+      await room.localParticipant.publishData(payload, { reliable: true, topic: 'chat-input' });
+      addChat('user', text, 'text');
+      addLog('info', 'پیام متنی برای Agent ارسال شد', `${text.length} نویسه`);
+      setDraft('');
+    } catch (error) {
+      addLog('error', 'ارسال پیام متنی ناموفق بود', errorMessage(error));
+    }
+  }
+
+  async function copyLogs() {
+    const output = logs.map((entry) => `[${entry.time}] [${entry.level.toUpperCase()}] ${entry.message}${entry.details ? `\n${entry.details}` : ''}`).join('\n\n');
+    try {
+      await navigator.clipboard.writeText(output);
+      addLog('success', 'گزارش رویدادها کپی شد');
+    } catch (error) {
+      addLog('error', 'کپی گزارش ناموفق بود', errorMessage(error));
+    }
+  }
+
+  const connected = phase === 'connected';
 
   return (
     <div className="app-shell" dir="rtl">
-      <main className="workspace" id="talk">
-        <button className="icon-button settings-button" aria-label="تنظیمات" onClick={() => setShowSettings(!showSettings)}><Settings2 size={19}/></button>
-        <section className={`call-layout ${isLive ? 'call-layout-live' : ''}`} aria-label="محیط گفتگوی صوتی و تصویری">
-          <div className={`video-panel ${isLive ? 'video-panel-live' : ''}`}>
-            <div className="panel-topline"><span className="panel-label"><span className={`status-dot ${isLive ? 'green pulse' : ''}`}/>{isLive ? 'در حال گفتگو' : 'فضای گفتگوی تصویری'}</span><button className="icon-button dots-button" aria-label="گزینه‌های بیشتر"><MoreHorizontal size={21}/></button></div>
-            {isLive ? (
-              <div className="video-frame-wrap">
-                <video ref={videoRef} className={`assistant-video ${assistantVideo ? 'visible' : ''}`} autoPlay playsInline />
-                <div className="audio-track-output" aria-hidden="true">
-                  {assistantAudioTracks.map((track) => <RemoteAudioOutput key={track.sid} track={track} />)}
-                </div>
-                {audioNeedsGesture && <button className="enable-audio-button" onClick={enableAudioPlayback}><Volume2 size={15}/> برای شنیدن صدا بزن</button>}
-                {!assistantVideo && <div className="avatar-waiting"><div className="waiting-orb"><AudioLines size={28}/></div><strong>در حال آماده‌شدن است</strong><span>چند لحظه صبر کن...</span></div>}
-                <div className="live-badge"><span className="live-dot"/> زنده</div>
-                <div className="call-controls">
-                  <button className="call-control" onClick={enableAudioPlayback} aria-label="فعال‌کردن پخش صدای"><Volume2 size={17}/></button>
-                  <button className={`call-control ${muted ? 'control-muted' : ''}`} onClick={toggleMute} aria-label={muted ? 'روشن‌کردن میکروفون' : 'بی‌صداکردن میکروفون'}>{muted ? <MicOff size={17}/> : <Mic size={17}/>}</button>
-                  <span>{muted ? 'میکروفون خاموش' : 'میکروفون روشن'}</span>
-                </div>
-              </div>
-            ) : (
-              <div className="visual-stage">
-                <div className="stage-orbit orbit-one"/><div className="stage-orbit orbit-two"/><div className="stage-orbit orbit-three"/>
-                <div className="stage-glow"/>
-                <div className="assistant-avatar"><div className="avatar-shine"/><span className="avatar-face">ه</span><span className="avatar-wave wave-a"/><span className="avatar-wave wave-b"/></div>
-                <div className="floating-note note-top"><span className="note-icon"><Waves size={15}/></span><span>فارسی را می‌فهمم</span><Check size={13}/></div>
-                <div className="floating-note note-bottom"><span className="equalizer"><i/><i/><i/><i/><i/></span><span>آماده‌ی گفتگو</span></div>
-              </div>
-            )}
-            <div className="video-footer">
-              <div className="voice-status"><span className="sound-icon"><Volume2 size={16}/></span><div><strong>{isLive ? (assistantAudioTracks.length ? 'ترک صدای آواتار متصل است' : 'در انتظار صدای آواتار') : 'صدای طبیعی و روان'}</strong><small>{isLive ? (audioNeedsGesture ? 'برای پخش، دکمه‌ی صدا را بزن' : `تعداد ترک‌های صوتی: ${assistantAudioTracks.length}`) : 'به زبان فارسی با هم صحبت می‌کنیم'}</small></div></div>
-              <div className="video-quality"><span className="quality-dot"/> HD</div>
-            </div>
-          </div>
+      <header className="topbar">
+        <div className="brand"><span className="brand-mark"><AudioLines size={18}/></span><div><strong>دستیار صوتی</strong><small>نمونه‌ی آزمایشی · محیط توسعه</small></div></div>
+        <div className={`connection-pill ${connected ? 'is-connected' : ''}`}><span className="connection-dot"/>{connected ? 'متصل' : phase === 'connecting' ? 'در حال اتصال' : 'قطع'}</div>
+      </header>
 
-          <aside className="side-panel">
-            <div className="side-heading"><div><span className="side-kicker">جلسه‌ی جدید</span><h2>با چی کمکت کنم؟</h2></div><span className="sparkle-bubble"><Sparkles size={17}/></span></div>
-            <p className="side-description">{isLive ? 'حرف‌های تشخیص‌داده‌شده و متن پاسخ اینجا می‌آیند؛ کمک می‌کند بفهمیم مدل زبانی جواب داده است یا نه.' : 'از یک سؤال ساده تا یک گفتگوی طولانی؛ از همین‌جا شروع کن.'}</p>
-            {isLive ? (
-              <>
-                <div className="suggestion-label">متن زنده‌ی گفتگو</div>
-                <div className="transcript-box" ref={transcriptRef} aria-live="polite" aria-label="متن تشخیص‌داده‌شده از صحبت‌های شما">
-                  {transcriptLines.length === 0 && !draftTranscript && <div className="transcript-empty"><span className="online-indicator"/>منتظر اولین جمله‌ات هستم...</div>}
-                  {transcriptLines.map((line) => <div className={`transcript-line ${line.role === 'assistant' ? 'transcript-assistant' : ''}`} key={line.id}><span>{line.role === 'assistant' ? 'همراه' : 'شما'}</span><p>{line.text}</p></div>)}
-                  {draftTranscript && <div className="transcript-line transcript-partial"><span>در حال تشخیص</span><p>{draftTranscript}</p></div>}
-                </div>
-              </>
-            ) : (
-              <>
-                <div className="suggestion-label">شاید این‌ها شروع خوبی باشند</div>
-                <div className="suggestions">
-                  <button className="suggestion" onClick={() => setOpeningLine('می‌تونی برای امروز یک برنامه‌ی خوب بهم پیشنهاد بدی؟')}><span className="suggestion-emoji">☀️</span><span>برای امروز برنامه‌ریزی کنیم</span><ArrowUpLeft size={15}/></button>
-                  <button className="suggestion" onClick={() => setOpeningLine('یک موضوع جالب بهم یاد بده.')}><span className="suggestion-emoji">💡</span><span>یه چیز تازه یادم بده</span><ArrowUpLeft size={15}/></button>
-                  <button className="suggestion" onClick={() => setOpeningLine('می‌خوام کمی گپ بزنیم.')}><span className="suggestion-emoji">💬</span><span>فقط یکم گپ بزنیم</span><ArrowUpLeft size={15}/></button>
-                </div>
-              </>
-            )}
-            <div className="divider"/>
-            <label className="input-label" htmlFor="opening-line">یا با یک جمله شروع کن <span>اختیاری</span></label>
-            <div className="message-input-wrap"><input id="opening-line" value={openingLine} onChange={(e) => setOpeningLine(e.target.value)} onKeyDown={(e) => e.key === 'Enter' && !isLive && startConversation()} placeholder="مثلاً: امروز حالم خوب نیست..." disabled={isLive || phase === 'connecting'}/><Mic size={17} className="input-mic"/></div>
-            {error && <div className="error-message" role="alert"><CircleHelp size={15}/><span>{error}</span></div>}
-            {isLive ? (
-              <button className="start-button end-button" onClick={endConversation}><PhoneOff size={18}/> پایان گفتگو</button>
-            ) : (
-              <button className="start-button" onClick={startConversation} disabled={phase === 'connecting'}>
-                {phase === 'connecting' ? <><span className="spinner"/> در حال آماده‌سازی...</> : <><Phone size={17} fill="currentColor"/> شروع گفتگوی صوتی و تصویری <ArrowUpLeft size={17}/></>}
-              </button>
-            )}
-            {!health?.configured && <div className="setup-hint"><span className="hint-icon"><Settings2 size={15}/></span><span>برای فعال‌سازی گفتگو، کلیدهای LiveKit، Tavus و OpenRouter را در فایل <code>.env</code> تنظیم کن.</span></div>}
-            <div className="privacy-note"><ShieldCheck size={14}/><span>با شروع تماس، مرورگر برای دسترسی به میکروفون اجازه می‌خواهد.</span></div>
+      <main className="page-content">
+        <section className="intro-row">
+          <div><span className="eyebrow">PROTOTYPE / DEPLOYMENT TEST</span><h1>گفتگو و عیب‌یابی</h1><p>اگر میکروفون کار نکرد، از چت متنی استفاده کنید. وضعیت سرویس‌ها و رخدادهای همین نشست پایین صفحه ثبت می‌شوند.</p></div>
+          <div className="session-actions">
+            {phase === 'idle' ? <button className="primary-button" onClick={startSession} disabled={phase === 'connecting'}><Wifi size={16}/> شروع نشست آزمایشی</button> : null}
+            {phase === 'connecting' ? <button className="primary-button" disabled><Activity size={16}/> در حال اتصال...</button> : null}
+            {connected && <>
+              <button className={`secondary-button ${micEnabled ? 'selected' : ''}`} onClick={toggleMic}>{micEnabled ? <Mic size={16}/> : <MicOff size={16}/>} {micEnabled ? 'میکروفون روشن' : 'میکروفون خاموش'}</button>
+              <button className="secondary-button" onClick={enableAudioPlayback}><Volume2 size={16}/> فعال‌سازی صدا</button>
+              <button className="danger-button" onClick={endSession}><Square size={14}/> پایان نشست</button>
+            </>}
+          </div>
+        </section>
+
+        <section className="workspace-grid">
+          <section className="panel chat-panel">
+            <div className="panel-heading"><div><MessageSquareIcon/><div><h2>چت</h2><small>ارسال متن مستقیم به Agent</small></div></div><span className="mode-tag">صوت + متن</span></div>
+            <div className="chat-stream" ref={chatRef} aria-live="polite">
+              {chatMessages.length === 0 && !draftTranscript && <div className="empty-chat"><MessageSquareIcon/><strong>پیام‌ها اینجا نمایش داده می‌شوند</strong><span>برای چت متنی ابتدا نشست را شروع کنید؛ در صورت خطای میکروفون، همین ورودی فعال می‌ماند.</span></div>}
+              {chatMessages.map((item) => <article className={`chat-message ${item.role}`} key={item.id}>
+                <div className="message-meta"><strong>{item.role === 'assistant' ? 'Agent' : 'شما'}</strong><time>{item.time}</time>{item.source && <span>{item.source === 'text' ? 'متن' : item.source === 'voice' ? 'صدا' : ''}</span>}</div>
+                <p>{item.text}</p>
+              </article>)}
+              {draftTranscript && <article className="chat-message user draft-message"><div className="message-meta"><strong>در حال تشخیص گفتار</strong></div><p>{draftTranscript}</p></article>}
+            </div>
+            <form className="chat-composer" onSubmit={sendText}>
+              <textarea value={draft} onChange={(event) => setDraft(event.target.value)} onKeyDown={(event) => { if (event.key === 'Enter' && !event.shiftKey) { event.preventDefault(); sendText(event); } }} placeholder={connected ? 'پیامت را بنویس… (Enter برای ارسال)' : 'برای فعال‌شدن چت، نشست آزمایشی را شروع کن'} disabled={!connected} rows={2}/>
+              <button className="send-button" type="submit" disabled={!connected || !draft.trim()} aria-label="ارسال پیام"><Send size={17}/></button>
+            </form>
+            <div className="chat-footnote">پیام‌ها در اتاق LiveKit همین نشست برای Agent ارسال می‌شوند.</div>
+          </section>
+
+          <aside className="right-column">
+            <section className="panel video-panel">
+              <div className="panel-heading"><div><Video size={17}/><div><h2>تصویر آواتار</h2><small>{assistantVideo ? 'ترک ویدئو دریافت شد' : connected ? 'منتظر انتشار ویدئوی Tavus' : 'پس از اتصال نمایش داده می‌شود'}</small></div></div><span className={`video-state ${assistantVideo ? 'ready' : ''}`}>{assistantVideo ? 'آماده' : 'انتظار'}</span></div>
+              <div className="video-stage">
+                <video ref={videoRef} className={assistantVideo ? 'video-visible' : ''} autoPlay playsInline />
+                {!assistantVideo && <div className="video-placeholder"><Video size={22}/><span>{connected ? 'در انتظار ترک ویدیویی Tavus…' : 'نشستی فعال نیست'}</span></div>}
+                <div className="audio-output" aria-hidden="true">{assistantAudioTracks.map((track) => <RemoteAudioOutput key={track.sid} track={track}/>)}</div>
+                {audioNeedsGesture && <button className="audio-prompt" onClick={enableAudioPlayback}>برای شنیدن پاسخ، کلیک کنید</button>}
+              </div>
+              <div className="video-meta"><span><span className={`tiny-dot ${assistantVideo ? 'green' : ''}`}/>{assistantVideo ? 'ویدئو وصل است' : 'ویدئو وصل نیست'}</span><span><Volume2 size={14}/> {assistantAudioTracks.length} ترک صوتی</span></div>
+            </section>
+
+            <section className="panel status-panel">
+              <div className="panel-heading"><div><Activity size={17}/><div><h2>اطلاعات اجرا</h2><small>بدون نمایش secretها</small></div></div></div>
+              <div className="status-grid">
+                <div><span>API</span><strong className={health?.configured ? 'status-good' : health ? 'status-bad' : ''}>{health ? (health.configured ? 'پیکربندی‌شده' : 'ناقص') : 'در حال بررسی'}</strong></div>
+                <div><span>Agent</span><strong>{health?.agentName || 'نامشخص'}</strong></div>
+                <div><span>LLM</span><strong>{health?.llmModel || 'LiveKit Inference'}</strong></div>
+                <div><span>اتاق</span><strong>{connected ? 'متصل' : '—'}</strong></div>
+              </div>
+              <p className="status-note">اطلاعات سلامت API فقط وجود تنظیمات سرور را بررسی می‌کند و اتصال واقعی Tavus یا مدل را تضمین نمی‌کند.</p>
+            </section>
           </aside>
         </section>
+
+        <section className="panel logs-panel">
+          <div className="panel-heading log-heading"><div><div className="log-icon"><Activity size={17}/></div><div><h2>گزارش نشست</h2><small>تمام رخدادهای مرورگر، API و Agent در این نشست · {logs.length} مورد</small></div></div><div className="log-actions"><button className="secondary-button compact" onClick={copyLogs}><Copy size={14}/> کپی گزارش</button><button className="secondary-button compact" onClick={() => setLogs([])}><Trash2 size={14}/> پاک‌کردن</button></div></div>
+          <div className="log-list" ref={logRef} role="log" aria-live="polite">
+            {logs.length === 0 && <div className="empty-logs">هنوز رویدادی ثبت نشده است.</div>}
+            {logs.map((entry) => <details className={`log-entry level-${entry.level}`} key={entry.id} open={entry.level === 'error'}>
+              <summary><time>{entry.time}</time><span className="level-label">{entry.level.toUpperCase()}</span><span className="log-message">{entry.message}</span><span className="details-indicator">{entry.details ? 'جزئیات' : ''}</span></summary>
+              {entry.details && <pre>{entry.details}</pre>}
+            </details>)}
+          </div>
+          <div className="log-disclaimer"><CircleAlert size={14}/> اطلاعات حساس را در گزارش‌ها کپی یا عمومی نکنید؛ متن گفتگو و جزئیات خطا ممکن است در اینجا ثبت شود.</div>
+        </section>
+
+        <footer className="footer"><span><WifiOff size={14}/> نسخه‌ی آزمایشی برای تست استقرار؛ تضمین پایداری یا امنیت تولیدی ندارد.</span><span>{logs.length} رخداد ذخیره‌شده در همین صفحه</span></footer>
       </main>
     </div>
   );
 }
 
-createRoot(document.getElementById('root')).render(<App />);
+function MessageSquareIcon() {
+  return <AudioLines size={17}/>;
+}
+
+createRoot(document.getElementById('root')).render(<App/>);
