@@ -9,7 +9,7 @@ import re
 from dotenv import load_dotenv
 from livekit import agents, rtc
 from livekit.agents import Agent, AgentSession, RoomOutputOptions, inference
-from livekit.plugins import tavus
+from livekit.plugins import google, tavus
 
 load_dotenv()
 
@@ -85,23 +85,30 @@ async def entrypoint(ctx: agents.JobContext) -> None:
 
     stt_model = os.getenv("LIVEKIT_STT_MODEL", "deepgram/nova-3")
     stt_language = os.getenv("LIVEKIT_STT_LANGUAGE", "fa")
-    llm_model = os.getenv("LIVEKIT_LLM_MODEL", "google/gemini-3.8-flash").strip()
-    if llm_model == "google/gemini-2.5-flash":
-        job_logger.warning(
-            "LIVEKIT_LLM_MODEL=google/gemini-2.5-flash is retired; using google/gemini-3.8-flash"
-        )
-        llm_model = "google/gemini-3.8-flash"
+    google_api_key = os.getenv("GOOGLE_API_KEY", "").strip()
+    # Accept the former env var as a migration path, but call the Gemini Developer API
+    # directly with the AI Studio key (not LiveKit Inference or Vertex AI).
+    llm_model = (
+        os.getenv("GOOGLE_LLM_MODEL")
+        or os.getenv("LIVEKIT_LLM_MODEL")
+        or "gemini-3.8-flash"
+    ).strip()
+    if llm_model.startswith("google/"):
+        llm_model = llm_model.removeprefix("google/")
+    if not google_api_key:
+        raise RuntimeError("GOOGLE_API_KEY is required for the Google AI Studio Gemini API")
+
     tts_model = os.getenv("LIVEKIT_TTS_MODEL", "google/gemini-3.8-flash-tts")
     tts_voice = os.getenv("LIVEKIT_TTS_VOICE", "Kore")
     tts_language = os.getenv("LIVEKIT_TTS_LANGUAGE", "fa")
     job_logger.info(
-        "Voice pipeline models: STT=%s (%s), LLM=LiveKit Inference/%s, TTS=%s voice=%s (%s)",
+        "Voice pipeline models: STT=LiveKit Inference/%s (%s), LLM=Google AI Studio/%s, TTS=LiveKit Inference/%s voice=%s (%s)",
         stt_model, stt_language, llm_model, tts_model, tts_voice, tts_language,
     )
 
     session = AgentSession(
         stt=inference.STT(model=stt_model, language=stt_language),
-        llm=inference.LLM(model=llm_model),
+        llm=google.LLM(model=llm_model, api_key=google_api_key, vertexai=False),
         tts=inference.TTS(model=tts_model, voice=tts_voice, language=tts_language),
     )
 
