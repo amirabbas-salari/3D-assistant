@@ -1,3 +1,6 @@
 livekit-agents~=1.8
 livekit-plugins-tavus~=1.8
+# Pin the Google plugin/SDK pair compatible with the project's Python 3.10+ support.
+livekit-plugins-google==1.8.11
+google-genai>=2.30.1,<3
 python-dotenv>=1.0.0
