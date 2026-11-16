@@ -322,10 +322,10 @@ function App() {
 
           <aside className="right-column">
             <section className="panel video-panel">
-              <div className="panel-heading"><div><Video size={17}/><div><h2>تصویر آواتار</h2><small>{assistantVideo ? 'ترک ویدئو دریافت شد' : connected ? 'منتظر انتشار ویدئوی Tavus' : 'پس از اتصال نمایش داده می‌شود'}</small></div></div><span className={`video-state ${assistantVideo ? 'ready' : ''}`}>{assistantVideo ? 'آماده' : 'انتظار'}</span></div>
+              <div className="panel-heading"><div><Video size={17}/><div><h2>تصویر آواتار</h2><small>{assistantVideo ? 'ترک ویدئو دریافت شد' : connected ? 'منتظر انتشار ویدئوی Simli' : 'پس از اتصال نمایش داده می‌شود'}</small></div></div><span className={`video-state ${assistantVideo ? 'ready' : ''}`}>{assistantVideo ? 'آماده' : 'انتظار'}</span></div>
               <div className="video-stage">
                 <video ref={videoRef} className={assistantVideo ? 'video-visible' : ''} autoPlay playsInline />
-                {!assistantVideo && <div className="video-placeholder"><Video size={22}/><span>{connected ? 'در انتظار ترک ویدیویی Tavus…' : 'نشستی فعال نیست'}</span></div>}
+                {!assistantVideo && <div className="video-placeholder"><Video size={22}/><span>{connected ? 'در انتظار ترک ویدیویی Simli…' : 'نشستی فعال نیست'}</span></div>}
                 <div className="audio-output" aria-hidden="true">{assistantAudioTracks.map((track) => <RemoteAudioOutput key={track.sid} track={track}/>)}</div>
                 {audioNeedsGesture && <button className="audio-prompt" onClick={enableAudioPlayback}>برای شنیدن پاسخ، کلیک کنید</button>}
               </div>
@@ -340,7 +340,7 @@ function App() {
                 <div><span>LLM</span><strong>{health?.llmModel || 'LiveKit Inference'}</strong></div>
                 <div><span>اتاق</span><strong>{connected ? 'متصل' : '—'}</strong></div>
               </div>
-              <p className="status-note">اطلاعات سلامت API فقط وجود تنظیمات سرور را بررسی می‌کند و اتصال واقعی Tavus یا مدل را تضمین نمی‌کند.</p>
+              <p className="status-note">اطلاعات سلامت API فقط وجود تنظیمات سرور را بررسی می‌کند و اتصال واقعی Simli یا مدل را تضمین نمی‌کند.</p>
             </section>
           </aside>
         </section>

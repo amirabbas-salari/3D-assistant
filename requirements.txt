@@ -1,4 +1,5 @@
 livekit-agents~=1.8
-livekit-plugins-tavus~=1.8
+livekit-plugins-simli~=1.8
 livekit-plugins-openai~=1.8
+livekit-plugins-elevenlabs~=1.8
 python-dotenv>=1.0.0

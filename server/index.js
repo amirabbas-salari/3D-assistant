@@ -13,8 +13,9 @@ app.use(express.json({ limit: '32kb' }));
 function isConfigured() {
   return Boolean(
     process.env.LIVEKIT_URL && process.env.LIVEKIT_API_KEY && process.env.LIVEKIT_API_SECRET &&
-    process.env.TAVUS_API_KEY && process.env.TAVUS_PAL_ID &&
-    process.env.CLOUDFLARE_ACCOUNT_ID && process.env.CLOUDFLARE_API_TOKEN,
+    process.env.SIMLI_API_KEY && process.env.SIMLI_FACE_ID &&
+    process.env.CLOUDFLARE_ACCOUNT_ID && process.env.CLOUDFLARE_API_TOKEN &&
+    process.env.ELEVEN_API_KEY && process.env.ELEVEN_VOICE_ID,
   );
 }
 
@@ -26,17 +27,21 @@ app.get('/api/health', (_req, res) => {
     llmProvider: 'Cloudflare Workers AI',
     llmModel: process.env.CLOUDFLARE_LLM_MODEL || '@cf/meta/llama-3.3-70b-instruct-fp8-fast',
     cloudflareConfigured: Boolean(process.env.CLOUDFLARE_ACCOUNT_ID && process.env.CLOUDFLARE_API_TOKEN),
+    avatarProvider: 'Simli',
+    simliConfigured: Boolean(process.env.SIMLI_API_KEY && process.env.SIMLI_FACE_ID),
     sttModel: process.env.LIVEKIT_STT_MODEL || 'deepgram/nova-3',
     sttLanguage: process.env.LIVEKIT_STT_LANGUAGE || 'fa',
-    ttsModel: process.env.LIVEKIT_TTS_MODEL || 'google/gemini-3.8-flash-tts',
-    ttsVoice: process.env.LIVEKIT_TTS_VOICE || 'Kore',
-    ttsLanguage: process.env.LIVEKIT_TTS_LANGUAGE || 'fa',
+    ttsProvider: 'ElevenLabs',
+    ttsModel: process.env.ELEVEN_TTS_MODEL || 'eleven_multilingual_v2',
+    ttsVoice: process.env.ELEVEN_VOICE_ID || null,
+    ttsLanguage: process.env.ELEVEN_TTS_LANGUAGE || 'fa',
+    elevenLabsConfigured: Boolean(process.env.ELEVEN_API_KEY && process.env.ELEVEN_VOICE_ID),
   });
 });
 
 app.post('/api/session', async (req, res) => {
   if (!isConfigured()) {
-    return res.status(503).json({ error: 'برای شروع، اطلاعات LiveKit و Tavus و Cloudflare Workers AI (CLOUDFLARE_ACCOUNT_ID و CLOUDFLARE_API_TOKEN) را در فایل .env تنظیم کنید.' });
+    return res.status(503).json({ error: 'برای شروع، اطلاعات LiveKit، Simli، Cloudflare Workers AI و ElevenLabs (ELEVEN_API_KEY و ELEVEN_VOICE_ID) را در فایل .env تنظیم کنید.' });
   }
 
   const roomName = `hamrah-${randomUUID().slice(0, 12)}`;
@@ -73,7 +78,7 @@ app.post('/api/session', async (req, res) => {
   } catch (error) {
     console.error('Could not start LiveKit session:', error);
     res.status(502).json({
-      error: 'ساخت جلسه‌ی صوتی/تصویری ناموفق بود. تنظیمات LiveKit، Agent و Tavus را بررسی کنید.',
+      error: 'ساخت جلسه‌ی صوتی/تصویری ناموفق بود. تنظیمات LiveKit، Agent و Simli را بررسی کنید.',
       details: process.env.NODE_ENV === 'production' ? undefined : (error instanceof Error ? error.message : String(error)),
     });
   }
