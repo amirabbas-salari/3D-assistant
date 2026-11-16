@@ -162,10 +162,10 @@ function App() {
                   {assistantAudioTracks.map((track) => <RemoteAudioOutput key={track.sid} track={track} />)}
                 </div>
                 {audioNeedsGesture && <button className="enable-audio-button" onClick={enableAudioPlayback}><Volume2 size={15}/> برای شنیدن صدا بزن</button>}
-                {!assistantVideo && <div className="avatar-waiting"><div className="waiting-orb"><AudioLines size={28}/></div><strong>همراه در حال آماده‌شدن است</strong><span>چند لحظه صبر کن...</span></div>}
+                {!assistantVideo && <div className="avatar-waiting"><div className="waiting-orb"><AudioLines size={28}/></div><strong>در حال آماده‌شدن است</strong><span>چند لحظه صبر کن...</span></div>}
                 <div className="live-badge"><span className="live-dot"/> زنده</div>
                 <div className="call-controls">
-                  <button className="call-control" onClick={enableAudioPlayback} aria-label="فعال‌کردن پخش صدای همراه"><Volume2 size={17}/></button>
+                  <button className="call-control" onClick={enableAudioPlayback} aria-label="فعال‌کردن پخش صدای"><Volume2 size={17}/></button>
                   <button className={`call-control ${muted ? 'control-muted' : ''}`} onClick={toggleMute} aria-label={muted ? 'روشن‌کردن میکروفون' : 'بی‌صداکردن میکروفون'}>{muted ? <MicOff size={17}/> : <Mic size={17}/>}</button>
                   <span>{muted ? 'میکروفون خاموش' : 'میکروفون روشن'}</span>
                 </div>
@@ -177,7 +177,6 @@ function App() {
                 <div className="assistant-avatar"><div className="avatar-shine"/><span className="avatar-face">ه</span><span className="avatar-wave wave-a"/><span className="avatar-wave wave-b"/></div>
                 <div className="floating-note note-top"><span className="note-icon"><Waves size={15}/></span><span>فارسی را می‌فهمم</span><Check size={13}/></div>
                 <div className="floating-note note-bottom"><span className="equalizer"><i/><i/><i/><i/><i/></span><span>آماده‌ی گفتگو</span></div>
-                <div className="stage-caption"><span className="caption-greeting">سلام، من همراه هستم</span><span className="caption-sub">برای شروع، دکمه‌ی گفتگو را بزن</span></div>
               </div>
             )}
             <div className="video-footer">
@@ -188,7 +187,7 @@ function App() {
 
           <aside className="side-panel">
             <div className="side-heading"><div><span className="side-kicker">جلسه‌ی جدید</span><h2>با چی کمکت کنم؟</h2></div><span className="sparkle-bubble"><Sparkles size={17}/></span></div>
-            <p className="side-description">{isLive ? 'حرف‌های تشخیص‌داده‌شده و متن پاسخ همراه اینجا می‌آیند؛ کمک می‌کند بفهمیم مدل زبانی جواب داده است یا نه.' : 'از یک سؤال ساده تا یک گفتگوی طولانی؛ از همین‌جا شروع کن.'}</p>
+            <p className="side-description">{isLive ? 'حرف‌های تشخیص‌داده‌شده و متن پاسخ اینجا می‌آیند؛ کمک می‌کند بفهمیم مدل زبانی جواب داده است یا نه.' : 'از یک سؤال ساده تا یک گفتگوی طولانی؛ از همین‌جا شروع کن.'}</p>
             {isLive ? (
               <>
                 <div className="suggestion-label">متن زنده‌ی گفتگو</div>

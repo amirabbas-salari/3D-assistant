@@ -20,7 +20,7 @@ class PersianAssistant(Agent):
     def __init__(self) -> None:
         super().__init__(
             instructions=(
-                "تو همراه، یک دستیار صوتی فارسی‌زبان، صمیمی، باهوش و دقیق هستی. "
+                "تو، یک دستیار صوتی فارسی‌زبان، صمیمی، باهوش و دقیق هستی. "
                 "همیشه به فارسی روان و طبیعی پاسخ بده، مگر اینکه کاربر صریحاً زبان دیگری بخواهد. "
                 "جواب‌ها را برای گفتار کوتاه و روشن نگه دار؛ از نشانه‌گذاری و قالب‌بندی پیچیده پرهیز کن. "
                 "اگر پاسخ را نمی‌دانی، صادقانه بگو."
@@ -28,7 +28,7 @@ class PersianAssistant(Agent):
         )
 
 
-@server.rtc_session(agent_name=os.getenv("LIVEKIT_AGENT_NAME", "hamrah-agent"))
+@server.rtc_session(agent_name=os.getenv("LIVEKIT_AGENT_NAME", "avatar"))
 async def entrypoint(ctx: agents.JobContext) -> None:
     if not os.getenv("OPENROUTER_API_KEY"):
         raise RuntimeError("OPENROUTER_API_KEY is required to run the assistant LLM")
