@@ -9,7 +9,7 @@ import re
 from dotenv import load_dotenv
 from livekit import agents, rtc
 from livekit.agents import Agent, AgentSession, RoomOutputOptions, inference
-from livekit.plugins import google, tavus
+from livekit.plugins import openai, tavus
 
 load_dotenv()
 
@@ -85,30 +85,31 @@ async def entrypoint(ctx: agents.JobContext) -> None:
 
     stt_model = os.getenv("LIVEKIT_STT_MODEL", "deepgram/nova-3")
     stt_language = os.getenv("LIVEKIT_STT_LANGUAGE", "fa")
-    google_api_key = os.getenv("GOOGLE_API_KEY", "").strip()
-    # Accept the former env var as a migration path, but call the Gemini Developer API
-    # directly with the AI Studio key (not LiveKit Inference or Vertex AI).
-    llm_model = (
-        os.getenv("GOOGLE_LLM_MODEL")
-        or os.getenv("LIVEKIT_LLM_MODEL")
-        or "gemini-3.8-flash"
+    cloudflare_account_id = os.getenv("CLOUDFLARE_ACCOUNT_ID", "").strip()
+    cloudflare_api_token = os.getenv("CLOUDFLARE_API_TOKEN", "").strip()
+    llm_model = os.getenv(
+        "CLOUDFLARE_LLM_MODEL",
+        "@cf/meta/llama-3.3-70b-instruct-fp8-fast",
     ).strip()
-    if llm_model.startswith("google/"):
-        llm_model = llm_model.removeprefix("google/")
-    if not google_api_key:
-        raise RuntimeError("GOOGLE_API_KEY is required for the Google AI Studio Gemini API")
+    if not cloudflare_account_id or not cloudflare_api_token:
+        raise RuntimeError(
+            "CLOUDFLARE_ACCOUNT_ID and CLOUDFLARE_API_TOKEN are required for Cloudflare Workers AI"
+        )
+    cloudflare_base_url = (
+        f"https://api.cloudflare.com/client/v4/accounts/{cloudflare_account_id}/ai/v1"
+    )
 
     tts_model = os.getenv("LIVEKIT_TTS_MODEL", "google/gemini-3.8-flash-tts")
     tts_voice = os.getenv("LIVEKIT_TTS_VOICE", "Kore")
     tts_language = os.getenv("LIVEKIT_TTS_LANGUAGE", "fa")
     job_logger.info(
-        "Voice pipeline models: STT=LiveKit Inference/%s (%s), LLM=Google AI Studio/%s, TTS=LiveKit Inference/%s voice=%s (%s)",
+        "Voice pipeline models: STT=LiveKit Inference/%s (%s), LLM=Cloudflare Workers AI/%s, TTS=LiveKit Inference/%s voice=%s (%s)",
         stt_model, stt_language, llm_model, tts_model, tts_voice, tts_language,
     )
 
     session = AgentSession(
         stt=inference.STT(model=stt_model, language=stt_language),
-        llm=google.LLM(model=llm_model, api_key=google_api_key, vertexai=False),
+        llm=openai.LLM(model=llm_model, api_key=cloudflare_api_token, base_url=cloudflare_base_url),
         tts=inference.TTS(model=tts_model, voice=tts_voice, language=tts_language),
     )
 
