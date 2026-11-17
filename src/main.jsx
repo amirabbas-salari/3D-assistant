@@ -33,12 +33,14 @@ function App() {
   const [logs, setLogs] = useState([]);
   const [draft, setDraft] = useState('');
   const [draftTranscript, setDraftTranscript] = useState('');
-  const [assistantVideo, setAssistantVideo] = useState(null);
+  const [avatarReady, setAvatarReady] = useState(false);
   const [assistantAudioTracks, setAssistantAudioTracks] = useState([]);
   const [micEnabled, setMicEnabled] = useState(false);
   const [audioNeedsGesture, setAudioNeedsGesture] = useState(false);
   const roomRef = useRef(null);
-  const videoRef = useRef(null);
+  const avatarContainerRef = useRef(null);
+  const avatarPlayerRef = useRef(null);
+  const avatarViewRef = useRef(null);
   const chatRef = useRef(null);
   const logRef = useRef(null);
 
@@ -92,11 +94,6 @@ function App() {
     };
   }, []);
 
-  useEffect(() => {
-    if (!assistantVideo || !videoRef.current) return undefined;
-    assistantVideo.attach(videoRef.current);
-    return () => assistantVideo.detach(videoRef.current);
-  }, [assistantVideo]);
 
   useEffect(() => {
     if (chatRef.current) chatRef.current.scrollTop = chatRef.current.scrollHeight;
@@ -124,8 +121,44 @@ function App() {
       }
 
       const { Room, RoomEvent, Track } = await import('livekit-client');
-      room = new Room({ adaptiveStream: true, dynacast: true });
+      room = new Room({ adaptiveStream: true, dynacast: true, singlePeerConnection: false });
       roomRef.current = room;
+
+      // Spatius publishes motion data on a LiveKit video track. Attach AvatarKit
+      // to this app-owned room before connecting; the track is not an HTML video.
+      try {
+        if (typeof globalThis.RTCRtpScriptTransform === 'undefined') {
+          throw new Error('مرورگر از RTCRtpScriptTransform موردنیاز آواتار Spatius پشتیبانی نمی‌کند');
+        }
+        const [avatarKit, avatarRtc] = await Promise.all([
+          import('@spatius/avatarkit'),
+          import('@spatius/avatarkit-rtc'),
+        ]);
+        await avatarKit.AvatarSDK.initialize(data.spatiusAppId, {
+          drivingServiceMode: avatarKit.DrivingServiceMode.rtc,
+        });
+        const avatar = await avatarKit.AvatarManager.shared.load(data.spatiusAvatarId);
+        const avatarView = new avatarKit.AvatarView(avatar, avatarContainerRef.current);
+        avatarViewRef.current = avatarView;
+        await new Promise((resolve, reject) => {
+          const timeout = window.setTimeout(() => reject(new Error('رندر اولیه‌ی آواتار Spatius بیش از حد طول کشید')), 20000);
+          avatarView.onFirstRendering = () => {
+            window.clearTimeout(timeout);
+            resolve();
+          };
+        });
+        const player = new avatarRtc.AvatarPlayer(new avatarRtc.LiveKitProvider(), avatarView);
+        player.on('error', (error) => addLog('error', 'خطای SDK آواتار Spatius', errorMessage(error)));
+        avatarPlayerRef.current = player;
+        await player.attach(room);
+        addLog('success', 'SDK آواتار Spatius آماده شد');
+      } catch (error) {
+        addLog('error', 'راه‌اندازی نمایشگر Spatius ناموفق بود', errorMessage(error));
+        await avatarPlayerRef.current?.detach().catch(() => {});
+        avatarPlayerRef.current = null;
+        avatarViewRef.current?.dispose();
+        avatarViewRef.current = null;
+      }
 
       room.on(RoomEvent.DataReceived, (payload) => {
         try {
@@ -156,15 +189,15 @@ function App() {
       });
       room.on(RoomEvent.TrackSubscribed, (track, publication, participant) => {
         if (track.kind === Track.Kind.Video) {
-          setAssistantVideo(track);
-          addLog('info', 'ترک ویدیویی دریافت شد', `${participant.identity} · ${publication.source}`);
+          setAvatarReady(true);
+          addLog('info', 'ترک حرکت آواتار دریافت شد', `${participant.identity} · ${publication.source}`);
         } else if (track.kind === Track.Kind.Audio) {
           setAssistantAudioTracks((current) => current.includes(track) ? current : [...current, track]);
           addLog('info', 'ترک صوتی دریافت شد', `${participant.identity} · ${publication.source}`);
         }
       });
       room.on(RoomEvent.TrackUnsubscribed, (track, _publication, participant) => {
-        if (track.kind === Track.Kind.Video) setAssistantVideo(null);
+        if (track.kind === Track.Kind.Video) setAvatarReady(false);
         if (track.kind === Track.Kind.Audio) setAssistantAudioTracks((current) => current.filter((item) => item !== track));
         addLog('warning', 'ترک از اتاق لغو شد', `${participant.identity} · ${track.kind}`);
       });
@@ -200,30 +233,38 @@ function App() {
 
       for (const participant of room.remoteParticipants.values()) {
         for (const publication of participant.videoTrackPublications.values()) {
-          if (publication.track) setAssistantVideo(publication.track);
+          if (publication.track) setAvatarReady(true);
         }
         for (const publication of participant.audioTrackPublications.values()) {
           if (publication.track) setAssistantAudioTracks((current) => current.includes(publication.track) ? current : [...current, publication.track]);
         }
       }
     } catch (error) {
+      try { await avatarPlayerRef.current?.detach(); } catch { /* session is already failing */ }
+      avatarPlayerRef.current = null;
+      avatarViewRef.current?.dispose();
+      avatarViewRef.current = null;
       room?.disconnect();
       roomRef.current = null;
       setPhase('idle');
       setMicEnabled(false);
-      setAssistantVideo(null);
+      setAvatarReady(false);
       setAssistantAudioTracks([]);
       addLog('error', 'شروع جلسه ناموفق بود', errorMessage(error));
     }
   }
 
-  function endSession() {
+  async function endSession() {
     addLog('info', 'درخواست پایان جلسه');
+    try { await avatarPlayerRef.current?.detach(); } catch (error) { addLog('warning', 'جداسازی Spatius ناموفق بود', errorMessage(error)); }
+    avatarPlayerRef.current = null;
+    avatarViewRef.current?.dispose();
+    avatarViewRef.current = null;
     roomRef.current?.disconnect();
     roomRef.current = null;
     setPhase('idle');
     setMicEnabled(false);
-    setAssistantVideo(null);
+    setAvatarReady(false);
     setAssistantAudioTracks([]);
     setAudioNeedsGesture(false);
     setDraftTranscript('');
@@ -322,14 +363,14 @@ function App() {
 
           <aside className="right-column">
             <section className="panel video-panel">
-              <div className="panel-heading"><div><Video size={17}/><div><h2>تصویر آواتار</h2><small>{assistantVideo ? 'ترک ویدئو دریافت شد' : connected ? 'منتظر انتشار ویدئوی Tavus' : 'پس از اتصال نمایش داده می‌شود'}</small></div></div><span className={`video-state ${assistantVideo ? 'ready' : ''}`}>{assistantVideo ? 'آماده' : 'انتظار'}</span></div>
+              <div className="panel-heading"><div><Video size={17}/><div><h2>تصویر آواتار</h2><small>{avatarReady ? 'داده‌ی حرکت آواتار دریافت شد' : connected ? 'در انتظار داده‌ی حرکت Spatius' : 'پس از اتصال نمایش داده می‌شود'}</small></div></div><span className={`video-state ${avatarReady ? 'ready' : ''}`}>{avatarReady ? 'آماده' : 'انتظار'}</span></div>
               <div className="video-stage">
-                <video ref={videoRef} className={assistantVideo ? 'video-visible' : ''} autoPlay playsInline />
-                {!assistantVideo && <div className="video-placeholder"><Video size={22}/><span>{connected ? 'در انتظار ترک ویدیویی Tavus…' : 'نشستی فعال نیست'}</span></div>}
+                <div ref={avatarContainerRef} className={`spatius-avatar ${avatarReady ? 'avatar-visible' : ''}`} />
+                {!avatarReady && <div className="video-placeholder"><Video size={22}/><span>{connected ? 'در انتظار آواتار Spatius…' : 'نشستی فعال نیست'}</span></div>}
                 <div className="audio-output" aria-hidden="true">{assistantAudioTracks.map((track) => <RemoteAudioOutput key={track.sid} track={track}/>)}</div>
                 {audioNeedsGesture && <button className="audio-prompt" onClick={enableAudioPlayback}>برای شنیدن پاسخ، کلیک کنید</button>}
               </div>
-              <div className="video-meta"><span><span className={`tiny-dot ${assistantVideo ? 'green' : ''}`}/>{assistantVideo ? 'ویدئو وصل است' : 'ویدئو وصل نیست'}</span><span><Volume2 size={14}/> {assistantAudioTracks.length} ترک صوتی</span></div>
+              <div className="video-meta"><span><span className={`tiny-dot ${avatarReady ? 'green' : ''}`}/>{avatarReady ? 'آواتار وصل است' : 'آواتار وصل نیست'}</span><span><Volume2 size={14}/> {assistantAudioTracks.length} ترک صوتی</span></div>
             </section>
 
             <section className="panel status-panel">
@@ -340,7 +381,7 @@ function App() {
                 <div><span>LLM</span><strong>{health?.llmModel || 'LiveKit Inference'}</strong></div>
                 <div><span>اتاق</span><strong>{connected ? 'متصل' : '—'}</strong></div>
               </div>
-              <p className="status-note">اطلاعات سلامت API فقط وجود تنظیمات سرور را بررسی می‌کند و اتصال واقعی Tavus یا مدل را تضمین نمی‌کند.</p>
+              <p className="status-note">اطلاعات سلامت API فقط وجود تنظیمات سرور را بررسی می‌کند و اتصال واقعی Spatius یا مدل را تضمین نمی‌کند.</p>
             </section>
           </aside>
         </section>
