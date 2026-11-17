@@ -9,7 +9,8 @@ import re
 from dotenv import load_dotenv
 from livekit import agents, rtc
 from livekit.agents import Agent, AgentSession, RoomOutputOptions, inference
-from livekit.plugins import google, openai, spatius
+from livekit.plugins import openai, spatius
+from gemini_interactions_tts import GeminiInteractionsTTS
 
 load_dotenv()
 
@@ -123,7 +124,7 @@ async def entrypoint(ctx: agents.JobContext) -> None:
     session = AgentSession(
         stt=inference.STT(model=stt_model, language=stt_language),
         llm=openai.LLM(model=llm_model, api_key=cloudflare_api_token, base_url=cloudflare_base_url),
-        tts=google.beta.GeminiTTS(
+        tts=GeminiInteractionsTTS(
             api_key=google_api_key,
             model=tts_model,
             voice_name=tts_voice,
