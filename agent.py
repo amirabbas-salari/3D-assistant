@@ -9,7 +9,7 @@ import re
 from dotenv import load_dotenv
 from livekit import agents, rtc
 from livekit.agents import Agent, AgentSession, RoomOutputOptions, inference
-from livekit.plugins import openai, tavus
+from livekit.plugins import elevenlabs, openai, tavus
 
 load_dotenv()
 
@@ -115,7 +115,10 @@ async def entrypoint(ctx: agents.JobContext) -> None:
 
     avatar = None
     try:
-        avatar_options = {"pal_id": os.environ["TAVUS_PAL_ID"]}
+        avatar_options = {
+            "api_key": os.environ["TAVUS_API_KEY"],
+            "pal_id": os.environ["TAVUS_PAL_ID"],
+        }
         if os.getenv("TAVUS_FACE_ID"):
             avatar_options["face_id"] = os.environ["TAVUS_FACE_ID"]
         avatar = tavus.AvatarSession(**avatar_options)
@@ -194,7 +197,7 @@ async def entrypoint(ctx: agents.JobContext) -> None:
     await session.start(
         agent=PersianAssistant(),
         room=ctx.room,
-        # Tavus owns audio when available; direct LiveKit output is a fallback.
+        # Tavus receives generated audio when available; direct LiveKit output is a fallback.
         room_output_options=RoomOutputOptions(audio_enabled=avatar is None),
     )
     job_logger.info("Agent session started and ready for voice or text input")
