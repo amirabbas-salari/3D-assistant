@@ -9,7 +9,7 @@ import re
 from dotenv import load_dotenv
 from livekit import agents, rtc
 from livekit.agents import Agent, AgentSession, RoomOutputOptions, inference
-from livekit.plugins import elevenlabs, openai, spatius
+from livekit.plugins import google, openai, spatius
 
 load_dotenv()
 
@@ -105,25 +105,36 @@ async def entrypoint(ctx: agents.JobContext) -> None:
         f"https://api.cloudflare.com/client/v4/accounts/{cloudflare_account_id}/ai/v1"
     )
 
-    tts_model = os.getenv("LIVEKIT_TTS_MODEL", "google/gemini-3.8-flash-tts")
-    tts_voice = os.getenv("LIVEKIT_TTS_VOICE", "Kore")
-    tts_language = os.getenv("LIVEKIT_TTS_LANGUAGE", "fa")
+    google_api_key = os.getenv("GOOGLE_API_KEY", "").strip()
+    tts_model = os.getenv("GOOGLE_TTS_MODEL", "gemini-3.8-flash-lite-tts").strip()
+    tts_voice = os.getenv("GOOGLE_TTS_VOICE", "Kore").strip()
+    tts_instructions = os.getenv(
+        "GOOGLE_TTS_INSTRUCTIONS",
+        "Speak naturally in Persian with a warm, friendly, conversational tone. Preserve the exact text.",
+    ).strip()
+    if not google_api_key:
+        raise RuntimeError("GOOGLE_API_KEY is required for Gemini TTS")
+
     job_logger.info(
-        "Voice pipeline models: STT=LiveKit Inference/%s (%s), LLM=Cloudflare Workers AI/%s, TTS=LiveKit Inference/%s voice=%s (%s)",
-        stt_model, stt_language, llm_model, tts_model, tts_voice, tts_language,
+        "Voice pipeline models: STT=LiveKit Inference/%s (%s), LLM=Cloudflare Workers AI/%s, TTS=Google Gemini/%s voice=%s",
+        stt_model, stt_language, llm_model, tts_model, tts_voice,
     )
 
     session = AgentSession(
         stt=inference.STT(model=stt_model, language=stt_language),
         llm=openai.LLM(model=llm_model, api_key=cloudflare_api_token, base_url=cloudflare_base_url),
-        tts=inference.TTS(model=tts_model, voice=tts_voice, language=tts_language),
+        tts=google.beta.GeminiTTS(
+            api_key=google_api_key,
+            model=tts_model,
+            voice_name=tts_voice,
+            instructions=tts_instructions,
+        ),
     )
 
     avatar = None
     spatius_sample_rate = int(os.getenv("SPATIUS_SAMPLE_RATE", "24000"))
     try:
-        # ElevenLabs v3 outputs 22.05 kHz by default, which Ogg Opus cannot encode.
-        # Pin the avatar output to a supported Opus rate; the audio pipeline resamples.
+        # Gemini TTS emits 24 kHz audio; keep Spatius on a supported Ogg Opus rate.
         avatar = spatius.AvatarSession(sample_rate=spatius_sample_rate)
         await avatar.start(session, room=ctx.room)
         job_logger.info(
