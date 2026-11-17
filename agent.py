@@ -1,4 +1,4 @@
-"""Persian LiveKit voice agent with a Simli-rendered avatar and text fallback."""
+"""Persian LiveKit voice agent with a Tavus-rendered avatar and text fallback."""
 
 import asyncio
 import json
@@ -9,7 +9,7 @@ import re
 from dotenv import load_dotenv
 from livekit import agents, rtc
 from livekit.agents import Agent, AgentSession, RoomOutputOptions, inference
-from livekit.plugins import elevenlabs, openai, simli
+from livekit.plugins import elevenlabs, openai, tavus
 
 load_dotenv()
 
@@ -124,18 +124,19 @@ async def entrypoint(ctx: agents.JobContext) -> None:
 
     avatar = None
     try:
-        simli_config = simli.SimliConfig(
-            api_key=os.environ["SIMLI_API_KEY"],
-            face_id=os.environ["SIMLI_FACE_ID"],
-            emotion_id=os.getenv("SIMLI_EMOTION_ID") or None,
-        )
-        avatar = simli.AvatarSession(simli_config=simli_config)
+        avatar_options = {
+            "api_key": os.environ["TAVUS_API_KEY"],
+            "pal_id": os.environ["TAVUS_PAL_ID"],
+        }
+        if os.getenv("TAVUS_FACE_ID"):
+            avatar_options["face_id"] = os.environ["TAVUS_FACE_ID"]
+        avatar = tavus.AvatarSession(**avatar_options)
         await avatar.start(session, room=ctx.room)
-        job_logger.info("Simli avatar session requested; waiting for its participant in background")
+        job_logger.info("Tavus avatar session started; waiting for its participant in background")
     except Exception:
-        # A Simli outage or configuration error must not prevent the voice agent
+        # A Tavus outage or configuration error must not prevent the voice agent
         # from joining the room and starting STT.
-        job_logger.exception("Could not start Simli avatar; continuing without video")
+        job_logger.exception("Could not start Tavus avatar; continuing without video")
         avatar = None
 
     async def publish_user_transcript(event) -> None:
@@ -205,7 +206,7 @@ async def entrypoint(ctx: agents.JobContext) -> None:
     await session.start(
         agent=PersianAssistant(),
         room=ctx.room,
-        # Simli receives generated audio when available; direct LiveKit output is a fallback.
+        # Tavus receives generated audio when available; direct LiveKit output is a fallback.
         room_output_options=RoomOutputOptions(audio_enabled=avatar is None),
     )
     job_logger.info("Agent session started and ready for voice or text input")
@@ -214,9 +215,9 @@ async def entrypoint(ctx: agents.JobContext) -> None:
         async def log_avatar_join() -> None:
             try:
                 await avatar.wait_for_join(timeout=30)
-                job_logger.info("Simli avatar joined and published its video track")
+                job_logger.info("Tavus avatar joined and published its video track")
             except Exception:
-                job_logger.exception("Simli avatar did not join; voice and text input remain active")
+                job_logger.exception("Tavus avatar did not join; voice and text input remain active")
 
         asyncio.create_task(log_avatar_join())
 
