@@ -1,4 +1,4 @@
-"""Persian LiveKit voice agent with a Simli-rendered avatar and text fallback."""
+"""Persian LiveKit voice agent with a Tavus-rendered avatar and text fallback."""
 
 import asyncio
 import json
@@ -9,7 +9,7 @@ import re
 from dotenv import load_dotenv
 from livekit import agents, rtc
 from livekit.agents import Agent, AgentSession, RoomOutputOptions, inference
-from livekit.plugins import elevenlabs, openai, simli
+from livekit.plugins import openai, tavus
 
 load_dotenv()
 
@@ -49,7 +49,7 @@ class PersianAssistant(Agent):
     def __init__(self) -> None:
         super().__init__(
             instructions=(
-                "تو، یک دستیار صوتی فارسی‌زبان، صمیمی، باهوش و دقیق هستی. "
+                "تو همراه، یک دستیار صوتی فارسی‌زبان، صمیمی، باهوش و دقیق هستی. "
                 "همیشه به فارسی روان و طبیعی پاسخ بده، مگر اینکه کاربر صریحاً زبان دیگری بخواهد. "
                 "جواب‌ها را برای گفتار کوتاه و روشن نگه دار؛ از نشانه‌گذاری و قالب‌بندی پیچیده پرهیز کن. "
                 "اگر پاسخ را نمی‌دانی، صادقانه بگو."
@@ -57,7 +57,7 @@ class PersianAssistant(Agent):
         )
 
 
-@server.rtc_session(agent_name=os.getenv("LIVEKIT_AGENT_NAME", "avatar"))
+@server.rtc_session(agent_name=os.getenv("LIVEKIT_AGENT_NAME", "hamrah-agent"))
 async def entrypoint(ctx: agents.JobContext) -> None:
     async def publish_room_message(message: dict, *, topic: str = "transcript") -> None:
         try:
@@ -99,43 +99,32 @@ async def entrypoint(ctx: agents.JobContext) -> None:
         f"https://api.cloudflare.com/client/v4/accounts/{cloudflare_account_id}/ai/v1"
     )
 
-    eleven_api_key = os.getenv("ELEVEN_API_KEY", "").strip()
-    tts_model = os.getenv("ELEVEN_TTS_MODEL", "eleven_multilingual_v2").strip()
-    tts_voice_id = os.getenv("ELEVEN_VOICE_ID", "").strip()
-    tts_language = os.getenv("ELEVEN_TTS_LANGUAGE", "fa").strip()
-    if not eleven_api_key or not tts_voice_id:
-        raise RuntimeError("ELEVEN_API_KEY and ELEVEN_VOICE_ID are required for ElevenLabs TTS")
-
+    tts_model = os.getenv("LIVEKIT_TTS_MODEL", "google/gemini-3.8-flash-tts")
+    tts_voice = os.getenv("LIVEKIT_TTS_VOICE", "Kore")
+    tts_language = os.getenv("LIVEKIT_TTS_LANGUAGE", "fa")
     job_logger.info(
-        "Voice pipeline models: STT=LiveKit Inference/%s (%s), LLM=Cloudflare Workers AI/%s, TTS=ElevenLabs/%s voice_id=%s (%s)",
-        stt_model, stt_language, llm_model, tts_model, tts_voice_id, tts_language,
+        "Voice pipeline models: STT=LiveKit Inference/%s (%s), LLM=Cloudflare Workers AI/%s, TTS=LiveKit Inference/%s voice=%s (%s)",
+        stt_model, stt_language, llm_model, tts_model, tts_voice, tts_language,
     )
 
     session = AgentSession(
         stt=inference.STT(model=stt_model, language=stt_language),
         llm=openai.LLM(model=llm_model, api_key=cloudflare_api_token, base_url=cloudflare_base_url),
-        tts=elevenlabs.TTS(
-            api_key=eleven_api_key,
-            voice_id=tts_voice_id,
-            model=tts_model,
-            language=tts_language,
-        ),
+        tts=inference.TTS(model=tts_model, voice=tts_voice, language=tts_language),
     )
 
     avatar = None
     try:
-        simli_config = simli.SimliConfig(
-            api_key=os.environ["SIMLI_API_KEY"],
-            face_id=os.environ["SIMLI_FACE_ID"],
-            emotion_id=os.getenv("SIMLI_EMOTION_ID") or None,
-        )
-        avatar = simli.AvatarSession(simli_config=simli_config)
+        avatar_options = {"pal_id": os.environ["TAVUS_PAL_ID"]}
+        if os.getenv("TAVUS_FACE_ID"):
+            avatar_options["face_id"] = os.environ["TAVUS_FACE_ID"]
+        avatar = tavus.AvatarSession(**avatar_options)
         await avatar.start(session, room=ctx.room)
-        job_logger.info("Simli avatar session requested; waiting for its participant in background")
+        job_logger.info("Tavus avatar session started; waiting for its participant in background")
     except Exception:
-        # A Simli outage or configuration error must not prevent the voice agent
+        # A Tavus outage or configuration error must not prevent the voice agent
         # from joining the room and starting STT.
-        job_logger.exception("Could not start Simli avatar; continuing without video")
+        job_logger.exception("Could not start Tavus avatar; continuing without video")
         avatar = None
 
     async def publish_user_transcript(event) -> None:
@@ -205,7 +194,7 @@ async def entrypoint(ctx: agents.JobContext) -> None:
     await session.start(
         agent=PersianAssistant(),
         room=ctx.room,
-        # Simli receives generated audio when available; direct LiveKit output is a fallback.
+        # Tavus owns audio when available; direct LiveKit output is a fallback.
         room_output_options=RoomOutputOptions(audio_enabled=avatar is None),
     )
     job_logger.info("Agent session started and ready for voice or text input")
@@ -214,9 +203,9 @@ async def entrypoint(ctx: agents.JobContext) -> None:
         async def log_avatar_join() -> None:
             try:
                 await avatar.wait_for_join(timeout=30)
-                job_logger.info("Simli avatar joined and published its video track")
+                job_logger.info("Tavus avatar joined and published its video track")
             except Exception:
-                job_logger.exception("Simli avatar did not join; voice and text input remain active")
+                job_logger.exception("Tavus avatar did not join; voice and text input remain active")
 
         asyncio.create_task(log_avatar_join())
 
