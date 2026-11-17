@@ -13,7 +13,7 @@ app.use(express.json({ limit: '32kb' }));
 function isConfigured() {
   return Boolean(
     process.env.LIVEKIT_URL && process.env.LIVEKIT_API_KEY && process.env.LIVEKIT_API_SECRET &&
-    process.env.TAVUS_API_KEY && process.env.TAVUS_PAL_ID &&
+    process.env.SPATIUS_API_KEY && process.env.SPATIUS_APP_ID && process.env.SPATIUS_AVATAR_ID &&
     process.env.CLOUDFLARE_ACCOUNT_ID && process.env.CLOUDFLARE_API_TOKEN &&
     process.env.ELEVEN_API_KEY && process.env.ELEVEN_VOICE_ID,
   );
@@ -27,8 +27,10 @@ app.get('/api/health', (_req, res) => {
     llmProvider: 'Cloudflare Workers AI',
     llmModel: process.env.CLOUDFLARE_LLM_MODEL || '@cf/meta/llama-3.3-70b-instruct-fp8-fast',
     cloudflareConfigured: Boolean(process.env.CLOUDFLARE_ACCOUNT_ID && process.env.CLOUDFLARE_API_TOKEN),
-    avatarProvider: 'Tavus',
-    tavusConfigured: Boolean(process.env.TAVUS_API_KEY && process.env.TAVUS_PAL_ID),
+    avatarProvider: 'Spatius',
+    spatiusConfigured: Boolean(process.env.SPATIUS_API_KEY && process.env.SPATIUS_APP_ID && process.env.SPATIUS_AVATAR_ID),
+    spatiusAppId: process.env.SPATIUS_APP_ID || null,
+    spatiusAvatarId: process.env.SPATIUS_AVATAR_ID || null,
     sttModel: process.env.LIVEKIT_STT_MODEL || 'deepgram/nova-3',
     sttLanguage: process.env.LIVEKIT_STT_LANGUAGE || 'fa',
     ttsProvider: 'ElevenLabs',
@@ -41,7 +43,7 @@ app.get('/api/health', (_req, res) => {
 
 app.post('/api/session', async (req, res) => {
   if (!isConfigured()) {
-    return res.status(503).json({ error: 'برای شروع، اطلاعات LiveKit، Tavus، Cloudflare Workers AI و ElevenLabs (ELEVEN_API_KEY و ELEVEN_VOICE_ID) را در فایل .env تنظیم کنید.' });
+    return res.status(503).json({ error: 'برای شروع، اطلاعات LiveKit، Spatius، Cloudflare Workers AI و ElevenLabs (ELEVEN_API_KEY و ELEVEN_VOICE_ID) را در فایل .env تنظیم کنید.' });
   }
 
   const roomName = `hamrah-${randomUUID().slice(0, 12)}`;
@@ -74,11 +76,14 @@ app.post('/api/session', async (req, res) => {
       serverUrl: process.env.LIVEKIT_URL,
       token: await accessToken.toJwt(),
       roomName,
+      // These identifiers are public SDK configuration; SPATIUS_API_KEY stays server-side.
+      spatiusAppId: process.env.SPATIUS_APP_ID,
+      spatiusAvatarId: process.env.SPATIUS_AVATAR_ID,
     });
   } catch (error) {
     console.error('Could not start LiveKit session:', error);
     res.status(502).json({
-      error: 'ساخت جلسه‌ی صوتی/تصویری ناموفق بود. تنظیمات LiveKit، Agent و Tavus را بررسی کنید.',
+      error: 'ساخت جلسه‌ی صوتی/تصویری ناموفق بود. تنظیمات LiveKit، Agent و Spatius را بررسی کنید.',
       details: process.env.NODE_ENV === 'production' ? undefined : (error instanceof Error ? error.message : String(error)),
     });
   }
