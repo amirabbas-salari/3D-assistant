@@ -63,4 +63,4 @@ NODE_ENV=production npm start
 - `GET /api/health` — وضعیت پیکربندی، بدون افشای رازها
 - `POST /api/session` — ساخت LiveKit room، dispatch کردن Agent و برگرداندن JWT کوتاه‌عمر برای همان room به‌همراه شناسه‌های عمومی Spatius
 
-`agent.py` از LiveKit Inference برای STT، Google Gemini TTS برای گفتار، Cloudflare Workers AI برای LLM و پلاگین رسمی `livekit-plugins-spatius` برای آواتار استفاده می‌کند. متن تشخیص‌داده‌شده و پاسخ Agent به‌صورت data packet به رابط فرستاده می‌شوند.
+`agent.py` از LiveKit Inference برای STT، Google Gemini TTS از طریق Interactions API (`v1beta`) با SDK رسمی `google-genai` برای گفتار، Cloudflare Workers AI برای LLM و پلاگین رسمی `livekit-plugins-spatius` برای آواتار استفاده می‌کند. این مسیر Interactions API را به‌کار می‌برد؛ endpoint قدیمی `generateContent` برای Gemini 3.8 TTS این ساختار درخواست را قبول نمی‌کند. متن تشخیص‌داده‌شده و پاسخ Agent به‌صورت data packet به رابط فرستاده می‌شوند.
