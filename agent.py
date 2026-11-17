@@ -129,10 +129,16 @@ async def entrypoint(ctx: agents.JobContext) -> None:
     )
 
     avatar = None
+    spatius_sample_rate = int(os.getenv("SPATIUS_SAMPLE_RATE", "24000"))
     try:
-        avatar = spatius.AvatarSession()
+        # ElevenLabs v3 outputs 22.05 kHz by default, which Ogg Opus cannot encode.
+        # Pin the avatar output to a supported Opus rate; the audio pipeline resamples.
+        avatar = spatius.AvatarSession(sample_rate=spatius_sample_rate)
         await avatar.start(session, room=ctx.room)
-        job_logger.info("Spatius avatar session started")
+        job_logger.info(
+            "Spatius avatar session started (audio sample rate: %s Hz)",
+            spatius_sample_rate,
+        )
     except Exception:
         # Spatius setup errors should not prevent voice/text fallback from running.
         job_logger.exception("Could not start Spatius avatar; continuing without avatar")

@@ -45,7 +45,7 @@ NODE_ENV=production npm start
 ## تنظیم Spatius، ElevenLabs و صدای فارسی
 
 1. در LiveKit Cloud یک project بسازید و `LIVEKIT_URL`, `LIVEKIT_API_KEY`, `LIVEKIT_API_SECRET` را در `.env` قرار دهید.
-2. در Spatius Studio یک App بسازید و `SPATIUS_API_KEY`, `SPATIUS_APP_ID` و `SPATIUS_AVATAR_ID` را تنظیم کنید. API key فقط در سرور و Agent می‌ماند. ناحیه به‌صورت خودکار انتخاب می‌شود؛ در صورت نیاز می‌توانید `SPATIUS_REGION` را روی `us-west`, `ap-northeast` یا `cn-beijing` تنظیم کنید.
+2. در Spatius Studio یک App بسازید و `SPATIUS_API_KEY`, `SPATIUS_APP_ID` و `SPATIUS_AVATAR_ID` را تنظیم کنید. API key فقط در سرور و Agent می‌ماند. ناحیه به‌صورت خودکار انتخاب می‌شود؛ در صورت نیاز می‌توانید `SPATIUS_REGION` را روی `us-west`, `ap-northeast` یا `cn-beijing` تنظیم کنید. نرخ خروجی آواتار پیش‌فرض `24000` هرتز است تا با Ogg Opus سازگار باشد؛ در صورت تغییر `SPATIUS_SAMPLE_RATE` فقط از `8000`, `12000`, `16000`, `24000` یا `48000` استفاده کنید.
 3. در ElevenLabs یک API key و voice ID انتخاب کنید؛ آن‌ها را در `ELEVEN_API_KEY` و `ELEVEN_VOICE_ID` قرار دهید. voice انتخابی باید فارسی را پشتیبانی کند.
 4. در Cloudflare مقدار `CLOUDFLARE_ACCOUNT_ID` و توکن دارای مجوز Workers AI را تنظیم کنید.
 5. Agent با نام `hamrah-agent` dispatch می‌شود؛ همین نام را با `LIVEKIT_AGENT_NAME` هماهنگ نگه دارید. Agent را اجرا کنید.
