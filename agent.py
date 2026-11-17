@@ -1,4 +1,4 @@
-"""Persian LiveKit voice agent with a Tavus-rendered avatar and text fallback."""
+"""Persian LiveKit voice agent with a Spatius-rendered avatar and text fallback."""
 
 import asyncio
 import json
@@ -9,7 +9,7 @@ import re
 from dotenv import load_dotenv
 from livekit import agents, rtc
 from livekit.agents import Agent, AgentSession, RoomOutputOptions, inference
-from livekit.plugins import elevenlabs, openai, tavus
+from livekit.plugins import elevenlabs, openai, spatius
 
 load_dotenv()
 
@@ -59,7 +59,13 @@ class PersianAssistant(Agent):
 
 @server.rtc_session(agent_name=os.getenv("LIVEKIT_AGENT_NAME", "hamrah-agent"))
 async def entrypoint(ctx: agents.JobContext) -> None:
+    # Spatius registers room RPC handlers, so connect before starting the avatar.
+    # AgentSession.start() reuses this connection.
+    await ctx.connect()
+
     async def publish_room_message(message: dict, *, topic: str = "transcript") -> None:
+        if not ctx.room.isconnected():
+            return
         try:
             await ctx.room.local_participant.publish_data(
                 json.dumps(message, ensure_ascii=False),
@@ -115,19 +121,12 @@ async def entrypoint(ctx: agents.JobContext) -> None:
 
     avatar = None
     try:
-        avatar_options = {
-            "api_key": os.environ["TAVUS_API_KEY"],
-            "pal_id": os.environ["TAVUS_PAL_ID"],
-        }
-        if os.getenv("TAVUS_FACE_ID"):
-            avatar_options["face_id"] = os.environ["TAVUS_FACE_ID"]
-        avatar = tavus.AvatarSession(**avatar_options)
+        avatar = spatius.AvatarSession()
         await avatar.start(session, room=ctx.room)
-        job_logger.info("Tavus avatar session started; waiting for its participant in background")
+        job_logger.info("Spatius avatar session started")
     except Exception:
-        # A Tavus outage or configuration error must not prevent the voice agent
-        # from joining the room and starting STT.
-        job_logger.exception("Could not start Tavus avatar; continuing without video")
+        # Spatius setup errors should not prevent voice/text fallback from running.
+        job_logger.exception("Could not start Spatius avatar; continuing without avatar")
         avatar = None
 
     async def publish_user_transcript(event) -> None:
@@ -197,20 +196,10 @@ async def entrypoint(ctx: agents.JobContext) -> None:
     await session.start(
         agent=PersianAssistant(),
         room=ctx.room,
-        # Tavus receives generated audio when available; direct LiveKit output is a fallback.
+        # Spatius publishes synchronized speech audio; direct LiveKit output is the fallback.
         room_output_options=RoomOutputOptions(audio_enabled=avatar is None),
     )
     job_logger.info("Agent session started and ready for voice or text input")
-
-    if avatar is not None:
-        async def log_avatar_join() -> None:
-            try:
-                await avatar.wait_for_join(timeout=30)
-                job_logger.info("Tavus avatar joined and published its video track")
-            except Exception:
-                job_logger.exception("Tavus avatar did not join; voice and text input remain active")
-
-        asyncio.create_task(log_avatar_join())
 
     try:
         metadata = json.loads(ctx.job.metadata or "{}")
