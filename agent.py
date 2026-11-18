@@ -8,7 +8,15 @@ import re
 
 from dotenv import load_dotenv
 from livekit import agents, rtc
-from livekit.agents import Agent, AgentSession, RoomOutputOptions, inference
+from livekit.agents import (
+    APIConnectOptions,
+    APIStatusError,
+    Agent,
+    AgentSession,
+    RoomOutputOptions,
+    SessionConnectOptions,
+    inference,
+)
 from livekit.plugins import openai, spatius
 
 load_dotenv()
@@ -94,6 +102,13 @@ async def entrypoint(ctx: agents.JobContext) -> None:
 
     stt_model = os.getenv("LIVEKIT_STT_MODEL", "deepgram/nova-3")
     stt_language = os.getenv("LIVEKIT_STT_LANGUAGE", "fa")
+    # Comma-separated Inference model names tried server-side when the primary
+    # provider for the language fails, e.g. "assemblyai/universal-streaming".
+    stt_fallback_models = [
+        item.strip()
+        for item in os.getenv("LIVEKIT_STT_FALLBACK", "").split(",")
+        if item.strip()
+    ]
     cloudflare_account_id = os.getenv("CLOUDFLARE_ACCOUNT_ID", "").strip()
     cloudflare_api_token = os.getenv("CLOUDFLARE_API_TOKEN", "").strip()
     llm_model = os.getenv(
@@ -118,13 +133,40 @@ async def entrypoint(ctx: agents.JobContext) -> None:
     tts_voice = os.getenv("LIVEKIT_TTS_VOICE", "Charon").strip() or "Charon"
     tts_language = os.getenv("LIVEKIT_TTS_LANGUAGE", "fa").strip() or "fa"
 
+    # LiveKit Inference rejects connections with HTTP 429 once the project's
+    # concurrent STT/TTS limit is reached. The SDK retries a few times with a
+    # fixed short interval and then gives up for the rest of the turn, which is
+    # what turns a brief burst into a dead microphone in the middle of a session.
+    # Waiting longer and retrying more keeps the session alive across a burst.
+    inference_conn_options = APIConnectOptions(
+        max_retry=int(os.getenv("LIVEKIT_INFERENCE_MAX_RETRY", "6")),
+        retry_interval=float(os.getenv("LIVEKIT_INFERENCE_RETRY_INTERVAL", "3.0")),
+        timeout=float(os.getenv("LIVEKIT_INFERENCE_TIMEOUT", "15.0")),
+    )
+    # The retry loop a stream actually runs on is the one the session hands it,
+    # not the one on the STT/TTS object (that only becomes a hint sent to the
+    # gateway), so the same options must also reach AgentSession.
+    session_conn_options = SessionConnectOptions(
+        stt_conn_options=inference_conn_options,
+        tts_conn_options=inference_conn_options,
+        # A short burst used to close the whole session after three failures.
+        max_unrecoverable_errors=int(os.getenv("LIVEKIT_MAX_UNRECOVERABLE_ERRORS", "8")),
+    )
+
     job_logger.info(
         "Voice pipeline models: STT=LiveKit Inference/%s (%s), LLM=Cloudflare Workers AI/%s (max_tokens=%s), TTS=LiveKit Inference/%s voice=%s (%s)",
         stt_model, stt_language, llm_model, llm_max_tokens, tts_model, tts_voice, tts_language,
     )
 
     session = AgentSession(
-        stt=inference.STT(model=stt_model, language=stt_language),
+        # fallback must be omitted (not None) when unused: the plugin parses
+        # every given value as a model name.
+        stt=inference.STT(
+            model=stt_model,
+            language=stt_language,
+            conn_options=inference_conn_options,
+            **({"fallback": stt_fallback_models} if stt_fallback_models else {}),
+        ),
         llm=openai.LLM(
             model=llm_model,
             api_key=cloudflare_api_token,
@@ -136,7 +178,9 @@ async def entrypoint(ctx: agents.JobContext) -> None:
             model=tts_model,
             voice=tts_voice,
             language=tts_language,
+            conn_options=inference_conn_options,
         ),
+        conn_options=session_conn_options,
     )
 
     avatar = None
@@ -178,7 +222,19 @@ async def entrypoint(ctx: agents.JobContext) -> None:
 
     @session.on("error")
     def on_session_error(event) -> None:
-        job_logger.error("AgentSession %s error: %s", event.source, event.error)
+        error = event.error
+        status = getattr(error, "status_code", None)
+        if status == 429:
+            job_logger.error(
+                "LiveKit Inference rejected a request with 429 (source=%s): the "
+                "project hit its concurrent STT/TTS limit. Close extra tabs and "
+                "agent sessions, then retry; see Settings -> Project in the "
+                "LiveKit dashboard for current quotas. %s",
+                event.source,
+                error,
+            )
+            return
+        job_logger.error("AgentSession %s error: %s", event.source, error)
 
     async def publish_assistant_reply(text: str) -> None:
         await publish_room_message({"type": "assistant_reply", "text": text})

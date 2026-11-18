@@ -61,6 +61,18 @@ AVATAR_ENABLED=false
 
 برای روشن‌کردن دوباره‌ی آواتار: `AVATAR_ENABLED=true` بگذارید و مطمئن شوید هر سه مقدار Spatius در `.env` پر هستند.
 
+## خطای ۴۲۹ در STT و TTS (سقف اتصال LiveKit Inference)
+
+روی پلن Build، LiveKit Inference برای هر پروژه **۵ اتصال هم‌زمان STT** و **۵ اتصال هم‌زمان TTS** مجاز می‌داند. هر Agent در حال اجرا یک اتصال STT و یک اتصال TTS نگه می‌دارد، و هر نشستی که با `POST /api/session` ساخته می‌شود یک Agent جدا دارد. پس چند نشست رهاشده (تب بسته‌شده، ری‌لود صفحه، یا نشستی که با «پایان نشست» تمام نشده) سقف را پر می‌کند و هر اتصال جدید با `429 Too Many Requests` رد می‌شود. سهمیه‌ی پروژه‌های رایگان بین همه‌ی پروژه‌های همان حساب تقسیم می‌شود و در داشبورد LiveKit، بخش **Settings → Project** دیده می‌شود.
+
+این نسخه سه کار برای همین حالت انجام می‌دهد:
+
+- **تلاش مجدد صبورانه**: `LIVEKIT_INFERENCE_MAX_RETRY`, `LIVEKIT_INFERENCE_RETRY_INTERVAL` و `LIVEKIT_INFERENCE_TIMEOUT` مقدارهای `APIConnectOptions` را تعیین می‌کنند و همان مقدارها هم روی خود مدل‌ها و هم روی `AgentSession` (`SessionConnectOptions`) گذاشته می‌شوند. مقدار روی مدل فقط به‌عنوان hint به گیت‌وی فرستاده می‌شود؛ حلقه‌ی تلاش مجددی که واقعاً اجرا می‌شود همان است که جلسه به stream می‌دهد. `LIVEKIT_MAX_UNRECOVERABLE_ERRORS` هم تعیین می‌کند چند خطای غیرقابل‌بازیابی پشت سر هم بگذرد تا کل جلسه بسته شود (پیش‌فرض `8`؛ قبلاً `3` بود و یک burst کوتاه جلسه را می‌بست).
+- **مدل جایگزین STT**: `LIVEKIT_STT_FALLBACK` فهرست جداشده با ویرگول از مدل‌های Inference است که سمت سرور امتحان می‌شوند، مثلاً `assemblyai/universal-streaming`. خالی بماند، هیچ fallback فرستاده نمی‌شود.
+- **بستن نشست‌های رهاشده**: دکمه‌ی «بستن نشست‌های باز قبلی» در پنل «صدا و متن» و اندپوینت `POST /api/sessions/cleanup` همه‌ی roomهای با پیشوند `hamrah-` را پاک می‌کنند و Agentهایشان را هم می‌بندند. اگر ۴۲۹ تکرار شد، اول این دکمه را بزنید، بعد دوباره نشست را شروع کنید. همچنین `startSession` با یک قفل داخلی از دو بار کلیک هم‌زمان جلوگیری می‌کند تا در یک نشست دو Agent ساخته نشود.
+
+اگر ۴۲۹ بعد از خالی‌شدن نشست‌ها هم ادامه داشت، سهمیه‌ی پروژه تمام شده است؛ در داشبورد LiveKit بخش Settings → Project را ببینید یا مدل STT/TTS را به ارائه‌دهنده‌ی دیگری با کلید مستقیم تغییر دهید.
+
 ## تنظیم Spatius و LiveKit Inference TTS
 
 1. در LiveKit Cloud یک project بسازید و `LIVEKIT_URL`, `LIVEKIT_API_KEY`, `LIVEKIT_API_SECRET` را در `.env` قرار دهید. LiveKit Inference برای TTS از همین اطلاعات استفاده می‌کند و به Google API key جداگانه نیاز ندارد.
@@ -102,5 +114,6 @@ Agent به LiveKit وصل می‌شود، STT و TTS را از LiveKit Inference
 
 - `GET /api/health` — وضعیت پیکربندی، بدون افشای رازها
 - `POST /api/session` — ساخت LiveKit room، dispatch کردن Agent و برگرداندن JWT کوتاه‌عمر برای همان room به‌همراه شناسه‌های عمومی Spatius
+- `POST /api/sessions/cleanup` — بستن roomهای رهاشده با پیشوند `hamrah-` تا اتصال‌های STT/TTS آزاد شوند
 
 `agent.py` از LiveKit Inference برای STT و TTS، Cloudflare Workers AI برای LLM و پلاگین رسمی `livekit-plugins-spatius` برای آواتار استفاده می‌کند. متن تشخیص‌داده‌شده و پاسخ Agent به‌صورت data packet به رابط فرستاده می‌شوند.

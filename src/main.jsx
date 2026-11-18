@@ -2,7 +2,7 @@ import React, { useEffect, useRef, useState } from 'react';
 import { createRoot } from 'react-dom/client';
 import {
   Activity, AudioLines, Check, CircleAlert, Copy, Mic, MicOff,
-  Send, Square, Trash2, Video, Volume2, Wifi, WifiOff,
+  RefreshCw, Send, Square, Trash2, Video, Volume2, Wifi, WifiOff,
 } from 'lucide-react';
 import './styles.css';
 
@@ -37,11 +37,15 @@ function App() {
   const [assistantAudioTracks, setAssistantAudioTracks] = useState([]);
   const [micEnabled, setMicEnabled] = useState(false);
   const [audioNeedsGesture, setAudioNeedsGesture] = useState(false);
+  const [cleanupBusy, setCleanupBusy] = useState(false);
   const roomRef = useRef(null);
   const avatarContainerRef = useRef(null);
   const avatarPlayerRef = useRef(null);
   const avatarViewRef = useRef(null);
   const motionWatchRef = useRef([]);
+  // Guards against a double click racing the async setPhase('connecting'): two
+  // sessions would mean two agents and two STT connections in one room.
+  const startingRef = useRef(false);
   const chatRef = useRef(null);
   const logRef = useRef(null);
 
@@ -166,7 +170,8 @@ function App() {
   }
 
   async function startSession() {
-    if (phase !== 'idle') return;
+    if (phase !== 'idle' || startingRef.current) return;
+    startingRef.current = true;
     setPhase('connecting');
     addLog('info', 'درخواست ایجاد جلسه ارسال شد');
     let room;
@@ -315,6 +320,7 @@ function App() {
       });
 
       await room.connect(data.serverUrl, data.token);
+      startingRef.current = false;
       setPhase('connected');
       addLog('success', 'به اتاق LiveKit متصل شدیم', `room=${data.roomName || 'unknown'} · agent=${health?.agentName || 'configured agent'}`);
 
@@ -349,6 +355,7 @@ function App() {
         }
       }
     } catch (error) {
+      startingRef.current = false;
       try { await avatarPlayerRef.current?.detach(); } catch { /* session is already failing */ }
       avatarPlayerRef.current = null;
       avatarViewRef.current?.dispose();
@@ -365,6 +372,7 @@ function App() {
 
   async function endSession() {
     addLog('info', 'درخواست پایان جلسه');
+    startingRef.current = false;
     clearMotionWatch();
     try { await avatarPlayerRef.current?.detach(); } catch (error) { addLog('warning', 'جداسازی Spatius ناموفق بود', errorMessage(error)); }
     avatarPlayerRef.current = null;
@@ -389,6 +397,26 @@ function App() {
       addLog('info', micEnabled ? 'میکروفون خاموش شد' : 'میکروفون روشن شد');
     } catch (error) {
       addLog('error', 'تغییر وضعیت میکروفون ناموفق بود', errorMessage(error));
+    }
+  }
+
+  // Every leftover room keeps an agent, and every agent holds one STT and one
+  // TTS connection against the LiveKit Inference limit. Closing them is what
+  // clears a 429 that keeps coming back.
+  async function closeStaleSessions() {
+    if (cleanupBusy) return;
+    setCleanupBusy(true);
+    addLog('info', 'درخواست بستن نشست‌های باز قبلی');
+    try {
+      const response = await fetch('/api/sessions/cleanup', { method: 'POST' });
+      const data = await response.json().catch(() => ({}));
+      if (!response.ok) throw new Error([data.error, data.details].filter(Boolean).join('\n') || `HTTP ${response.status}`);
+      const count = Array.isArray(data.closedRooms) ? data.closedRooms.length : 0;
+      addLog(count ? 'success' : 'info', count ? `${count} نشست قبلی بسته شد` : 'نشست بازی برای بستن پیدا نشد');
+    } catch (error) {
+      addLog('error', 'بستن نشست‌های قبلی ناموفق بود', errorMessage(error));
+    } finally {
+      setCleanupBusy(false);
     }
   }
 
@@ -493,6 +521,9 @@ function App() {
                 <div className="voice-row"><span>ترک صوتی Agent</span><strong>{assistantAudioTracks.length}</strong></div>
                 <div className="voice-row"><span>پخش صدا</span><strong>{audioNeedsGesture ? 'نیازمند کلیک' : connected ? 'فعال' : 'غیرفعال'}</strong></div>
                 {audioNeedsGesture && <button className="secondary-button" onClick={enableAudioPlayback}>فعال‌سازی پخش صدا</button>}
+                <button className="secondary-button" onClick={closeStaleSessions} disabled={cleanupBusy}>
+                  <RefreshCw size={14}/> {cleanupBusy ? 'در حال بستن…' : 'بستن نشست‌های باز قبلی'}
+                </button>
               </div>
             </section>}
 

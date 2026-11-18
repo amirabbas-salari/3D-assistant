@@ -105,6 +105,32 @@ app.post('/api/session', async (req, res) => {
   }
 });
 
+// Every open room keeps its agent running, and each agent holds one STT and one
+// TTS connection against the LiveKit Inference limit. Rooms left behind by a
+// closed tab therefore start answering 429 for every new session, so give the
+// page a way to shut them down.
+app.post('/api/sessions/cleanup', async (_req, res) => {
+  if (!(process.env.LIVEKIT_URL && process.env.LIVEKIT_API_KEY && process.env.LIVEKIT_API_SECRET)) {
+    return res.status(503).json({ error: 'اطلاعات LiveKit در فایل .env تنظیم نشده است.' });
+  }
+  try {
+    const livekitHost = process.env.LIVEKIT_URL.replace(/^wss:\/\//, 'https://').replace(/^ws:\/\//, 'http://');
+    const api = new LiveKitAPI({ host: livekitHost, apiKey: process.env.LIVEKIT_API_KEY, secret: process.env.LIVEKIT_API_SECRET });
+    const rooms = await api.room.listRooms();
+    const stale = rooms.filter((room) => String(room.name || '').startsWith('hamrah-'));
+    for (const room of stale) {
+      await api.room.deleteRoom(room.name);
+    }
+    res.json({ closedRooms: stale.map((room) => room.name) });
+  } catch (error) {
+    console.error('Could not close stale sessions:', error);
+    res.status(502).json({
+      error: 'بستن نشست‌های باز ناموفق بود.',
+      details: process.env.NODE_ENV === 'production' ? undefined : (error instanceof Error ? error.message : String(error)),
+    });
+  }
+});
+
 if (process.env.NODE_ENV === 'production') {
   const clientDist = path.resolve(__dirname, '../dist');
   app.use(express.static(clientDist));
