@@ -183,18 +183,24 @@ function App() {
       }
 
       const { Room, RoomEvent, Track } = await import('livekit-client');
-      // adaptiveStream MUST stay off. Spatius publishes motion data on a video
-      // track and attaches it to a hidden (display:none) <video> element; with
-      // adaptiveStream on, LiveKit sees "nobody is watching" and tells the
-      // server to pause that track, so no motion frames arrive and the avatar
-      // stops moving its lips (audio keeps playing). dynacast only affects
-      // publishing, so it stays enabled.
-      room = new Room({ adaptiveStream: false, dynacast: true, singlePeerConnection: false });
+      // When the avatar runs, adaptiveStream MUST stay off: Spatius publishes
+      // motion data on a video track that the SDK attaches to a hidden
+      // (display:none) <video> element, so LiveKit would conclude nobody is
+      // watching and ask the server to pause it — no motion frames, static face.
+      // With the avatar off, motion is expected and adaptiveStream is safe.
+      room = new Room({
+        adaptiveStream: !avatarEnabled,
+        dynacast: true,
+        singlePeerConnection: !avatarEnabled ? undefined : false,
+      });
       roomRef.current = room;
 
       // Spatius publishes motion data on a LiveKit video track. Attach AvatarKit
       // to this app-owned room before connecting; the track is not an HTML video.
-      try {
+      // Skipped entirely while the avatar is disabled for LLM/TTS/STT work.
+      if (!avatarEnabled) {
+        addLog('info', 'آواتار خاموش است', 'AVATAR_ENABLED=false · فقط صدا و متن فعال است');
+      } else try {
         if (typeof globalThis.RTCRtpScriptTransform === 'undefined') {
           throw new Error('مرورگر از RTCRtpScriptTransform موردنیاز آواتار Spatius پشتیبانی نمی‌کند');
         }
@@ -425,6 +431,9 @@ function App() {
   }
 
   const connected = phase === 'connected';
+  // Health is the single source of truth so the agent and the browser never
+  // disagree about whether the avatar is on.
+  const avatarEnabled = Boolean(health?.avatarEnabled);
 
   return (
     <div className="app-shell" dir="rtl">
@@ -466,16 +475,26 @@ function App() {
           </section>
 
           <aside className="right-column">
-            <section className="panel video-panel">
+            {/* Remote audio must stay mounted even with the avatar off, otherwise
+                the assistant is silent. With the avatar on, Spatius publishes
+                that audio; with it off, the agent publishes its own TTS audio. */}
+            <div className="audio-output" aria-hidden="true">{assistantAudioTracks.map((track) => <RemoteAudioOutput key={track.sid} track={track}/>)}</div>
+            {avatarEnabled ? <section className="panel video-panel">
               <div className="panel-heading"><div><Video size={17}/><div><h2>تصویر آواتار</h2><small>{avatarReady ? 'داده‌ی حرکت آواتار دریافت شد' : connected ? 'در انتظار داده‌ی حرکت Spatius' : 'پس از اتصال نمایش داده می‌شود'}</small></div></div><span className={`video-state ${avatarReady ? 'ready' : ''}`}>{avatarReady ? 'آماده' : 'انتظار'}</span></div>
               <div className="video-stage">
                 <div ref={avatarContainerRef} className={`spatius-avatar ${avatarReady ? 'avatar-visible' : ''}`} />
                 {!avatarReady && <div className="video-placeholder"><Video size={22}/><span>{connected ? 'در انتظار آواتار Spatius…' : 'نشستی فعال نیست'}</span></div>}
-                <div className="audio-output" aria-hidden="true">{assistantAudioTracks.map((track) => <RemoteAudioOutput key={track.sid} track={track}/>)}</div>
                 {audioNeedsGesture && <button className="audio-prompt" onClick={enableAudioPlayback}>برای شنیدن پاسخ، کلیک کنید</button>}
               </div>
               <div className="video-meta"><span><span className={`tiny-dot ${avatarReady ? 'green' : ''}`}/>{avatarReady ? 'آواتار وصل است' : 'آواتار وصل نیست'}</span><span><Volume2 size={14}/> {assistantAudioTracks.length} ترک صوتی</span></div>
-            </section>
+            </section> : <section className="panel voice-panel">
+              <div className="panel-heading"><div><AudioLines size={17}/><div><h2>صدا و متن</h2><small>آواتار خاموش است؛ STT، LLM و TTS کامل اجرا می‌شوند</small></div></div><span className="video-state ready">آماده</span></div>
+              <div className="voice-body">
+                <div className="voice-row"><span>ترک صوتی Agent</span><strong>{assistantAudioTracks.length}</strong></div>
+                <div className="voice-row"><span>پخش صدا</span><strong>{audioNeedsGesture ? 'نیازمند کلیک' : connected ? 'فعال' : 'غیرفعال'}</strong></div>
+                {audioNeedsGesture && <button className="secondary-button" onClick={enableAudioPlayback}>فعال‌سازی پخش صدا</button>}
+              </div>
+            </section>}
 
             <section className="panel status-panel">
               <div className="panel-heading"><div><Activity size={17}/><div><h2>اطلاعات اجرا</h2><small>بدون نمایش secretها</small></div></div></div>

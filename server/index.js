@@ -10,11 +10,23 @@ const port = Number(process.env.PORT || 3001);
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 app.use(express.json({ limit: '32kb' }));
 
+// Temporary focus mode: the avatar can be switched off while the STT, LLM, and
+// TTS pipeline is being worked on. Spatius credentials are then not required.
+function avatarEnabled() {
+  return ['1', 'true', 'yes', 'on'].includes(
+    String(process.env.AVATAR_ENABLED ?? 'false').trim().toLowerCase(),
+  );
+}
+
 function isConfigured() {
-  return Boolean(
+  const voicePipeline = Boolean(
     process.env.LIVEKIT_URL && process.env.LIVEKIT_API_KEY && process.env.LIVEKIT_API_SECRET &&
-    process.env.SPATIUS_API_KEY && process.env.SPATIUS_APP_ID && process.env.SPATIUS_AVATAR_ID &&
     process.env.CLOUDFLARE_ACCOUNT_ID && process.env.CLOUDFLARE_API_TOKEN,
+  );
+  if (!voicePipeline) return false;
+  if (!avatarEnabled()) return true;
+  return Boolean(
+    process.env.SPATIUS_API_KEY && process.env.SPATIUS_APP_ID && process.env.SPATIUS_AVATAR_ID,
   );
 }
 
@@ -27,6 +39,7 @@ app.get('/api/health', (_req, res) => {
     llmModel: process.env.CLOUDFLARE_LLM_MODEL || '@cf/meta/llama-3.3-70b-instruct-fp8-fast',
     llmMaxTokens: Number(process.env.CLOUDFLARE_LLM_MAX_TOKENS || 8192),
     cloudflareConfigured: Boolean(process.env.CLOUDFLARE_ACCOUNT_ID && process.env.CLOUDFLARE_API_TOKEN),
+    avatarEnabled: avatarEnabled(),
     avatarProvider: 'Spatius',
     spatiusConfigured: Boolean(process.env.SPATIUS_API_KEY && process.env.SPATIUS_APP_ID && process.env.SPATIUS_AVATAR_ID),
     spatiusAppId: process.env.SPATIUS_APP_ID || null,
@@ -43,7 +56,10 @@ app.get('/api/health', (_req, res) => {
 
 app.post('/api/session', async (req, res) => {
   if (!isConfigured()) {
-    return res.status(503).json({ error: 'برای شروع، اطلاعات LiveKit، Spatius و Cloudflare Workers AI را در فایل .env تنظیم کنید؛ TTS از LiveKit Inference استفاده می‌کند و کلید جداگانه‌ی ارائه‌دهنده لازم ندارد.' });
+    const needs = avatarEnabled()
+      ? 'اطلاعات LiveKit، Spatius و Cloudflare Workers AI'
+      : 'اطلاعات LiveKit و Cloudflare Workers AI (آواتار خاموش است و Spatius لازم نیست)';
+    return res.status(503).json({ error: `برای شروع، ${needs} را در فایل .env تنظیم کنید؛ TTS از LiveKit Inference استفاده می‌کند و کلید جداگانه‌ی ارائه‌دهنده لازم ندارد.` });
   }
 
   const roomName = `hamrah-${randomUUID().slice(0, 12)}`;

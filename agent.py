@@ -140,23 +140,30 @@ async def entrypoint(ctx: agents.JobContext) -> None:
     )
 
     avatar = None
-    spatius_sample_rate = int(os.getenv("SPATIUS_SAMPLE_RATE", "24000"))
-    spatius_audio_format = os.getenv("SPATIUS_AUDIO_FORMAT", "pcm_s16le").strip().lower()
-    try:
-        # PCM avoids requiring a system libopus DLL on Windows. Ogg Opus is optional.
-        avatar = spatius.AvatarSession(
-            sample_rate=spatius_sample_rate,
-            audio_format=spatius_audio_format,
-        )
-        await avatar.start(session, room=ctx.room)
-        job_logger.info(
-            "Spatius avatar session started (audio sample rate: %s Hz, format: %s)",
-            spatius_sample_rate, spatius_audio_format,
-        )
-    except Exception:
-        # Spatius setup errors should not prevent voice/text fallback from running.
-        job_logger.exception("Could not start Spatius avatar; continuing without avatar")
-        avatar = None
+    # The avatar only drives rendering; STT, LLM, and TTS run in full either way.
+    # With it off, the agent's own LiveKit audio output is enabled so you can
+    # focus on the voice pipeline end to end.
+    avatar_enabled = os.getenv("AVATAR_ENABLED", "false").strip().lower() in {"1", "true", "yes", "on"}
+    if not avatar_enabled:
+        job_logger.info("Avatar disabled (AVATAR_ENABLED=false); using direct LiveKit audio output")
+    else:
+        spatius_sample_rate = int(os.getenv("SPATIUS_SAMPLE_RATE", "24000"))
+        spatius_audio_format = os.getenv("SPATIUS_AUDIO_FORMAT", "pcm_s16le").strip().lower()
+        try:
+            # PCM avoids requiring a system libopus DLL on Windows. Ogg Opus is optional.
+            avatar = spatius.AvatarSession(
+                sample_rate=spatius_sample_rate,
+                audio_format=spatius_audio_format,
+            )
+            await avatar.start(session, room=ctx.room)
+            job_logger.info(
+                "Spatius avatar session started (audio sample rate: %s Hz, format: %s)",
+                spatius_sample_rate, spatius_audio_format,
+            )
+        except Exception:
+            # Spatius setup errors should not prevent voice/text fallback from running.
+            job_logger.exception("Could not start Spatius avatar; continuing without avatar")
+            avatar = None
 
     async def publish_user_transcript(event) -> None:
         text = (event.transcript or "").strip()
@@ -225,7 +232,8 @@ async def entrypoint(ctx: agents.JobContext) -> None:
     await session.start(
         agent=PersianAssistant(),
         room=ctx.room,
-        # Spatius publishes synchronized speech audio; direct LiveKit output is the fallback.
+        # The avatar publishes synchronized speech audio; otherwise the agent
+        # publishes its own TTS audio into the room.
         room_output_options=RoomOutputOptions(audio_enabled=avatar is None),
     )
     job_logger.info("Agent session started and ready for voice or text input")
