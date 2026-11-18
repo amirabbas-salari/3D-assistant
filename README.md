@@ -111,10 +111,63 @@ WARNING: in-process auto-reload has been removed from the Python CLI; use `lk ag
 
 پس تا وقتی این پروژه هم `package.json` دارد، `python agent.py dev` ساده‌ترین گزینه است؛ اگر hot-reload می‌خواهید، جابه‌جایی موقت `package.json` لازم است.
 
+### `lk agent dev agent.py` → `api-key is required`
+
+بعد از حل مشکل entrypoint، `lk` جلوی دیگری می‌ایستد. این پیام از `resolveProject` در `cmd/lk/utils.go` می‌آید، یعنی **هیچ‌کدام** از این منابع مقدار نداشته‌اند:
+
+1. فلگ `--project`
+2. فلگ `--subdomain`
+3. فلگ‌های `--url/--api-key/--api-secret` یا متغیرهای محیطی `LIVEKIT_*`
+4. `--dev` (اعتبارنامه‌ی لوکال)
+5. `livekit.toml`
+6. پروژه‌ی پیش‌فرض تنظیم‌شده در `lk`
+
+برخلاف خود ایجنت که `load_dotenv()` را روی `.env` صدا می‌زند، `lk` هیچ dotenvای را **در شل شما** بارگذاری نمی‌کند. فقط این دو فایل را می‌خواند:
+
+```
+.env.local
+.env
+```
+
+و برای استفاده از کلید داخل فایل، شرطش این است که **هم** `LIVEKIT_API_KEY` و **هم** `LIVEKIT_API_SECRET` پر باشند. متغیرهای محیطی PowerShell بر اینها مقدم‌اند.
+
+پس اول ببینید `.env` واقعاً چه دارد:
+
+```powershell
+python scripts/check_env.py --skip-network
+```
+
+این اسکریپت وجود فایل، خالی بودن هر کلید، جابه‌جایی احتمالی key/secret، و تعارض `.env` با `.env.local` را گزارش می‌دهد.
+
+| علت | نشانه | راه‌حل |
+| --- | --- | --- |
+| `.env` ساخته نشده | `check_env.py` می‌گوید «.env وجود ندارد» | `Copy-Item .env.example .env` |
+| `LIVEKIT_API_KEY=` خالی | پیام `api-key is required` | مقدار را از LiveKit Cloud → Settings → Keys بردارید |
+| فقط یکی از key/secret پر است | همان پیام | هر دو لازم است |
+| `.env.local` قدیمی برنده شده | `check_env.py` تعارض را نشان می‌دهد | `.env.local` را حذف یا به‌روز کنید |
+| متغیر محیطی قدیمی در شل | `echo $env:LIVEKIT_API_KEY` | `Remove-Item Env:LIVEKIT_API_KEY` |
+
+اگر نمی‌خواهید با `.env` درگیر شوید، دو راه دیگر هم هست:
+
+**۱. کلید را مستقیم بدهید.** `--url`, `--api-key` و `--api-secret` فلگ‌های سراسری `lk` هستند، پس بعد از نام ساب‌کامند هم کار می‌کنند:
+
+```powershell
+lk agent dev agent.py --url wss://your-project.livekit.cloud --api-key APIxxxxxxxx --api-secret xxxxxxxxxxxxxxxx
+```
+
+**۲. یک بار پروژه را در `lk` ثبت کنید** تا از آن به بعد خودش پیدا شود:
+
+```powershell
+lk cloud auth
+```
+
+> **یادآوری:** `python agent.py dev` این مشکل را ندارد، چون `agent.py` خودش `.env` را با `load_dotenv()` می‌خواند. تفاوت اینجاست که `lk` و ایجنت دو مسیر جدا برای خواندن اعتبارنامه دارند.
+
 ### اگر باز هم کار نکرد
 
 - **`lk` شناخته نمی‌شود:** LiveKit CLI جدا از SDK پایتون نصب می‌شود (`winget install LiveKit.LiveKitCLI`). نصبش اجباری نیست؛ `python agent.py dev` جایگزین کامل است.
 - **`lk` پیام `could not detect project type` داد:** یعنی در آن پوشه نه `package.json` هست نه `requirements.txt`؛ از ریشه‌ی پروژه اجرا کنید.
+- **هر خطای دیگری درباره‌ی اعتبارنامه یا اتصال:** `python scripts/check_env.py` را بزنید؛ وجود `.env`، خالی بودن هر کلید، جابه‌جایی key/secret، تعارض `.env.local`، و پذیرش واقعی کلید توسط LiveKit را جدا گزارش می‌کند.
 - **`ModuleNotFoundError` برای `livekit` یا `latency`:** venv فعال نیست. با `python -c "import sys; print(sys.executable)"` مطمئن شوید از کدام مفسر استفاده می‌شود، بعد `pip install -r requirements.txt` را در همان محیط بزنید.
 - **خطای `SPEECH_PROVIDER=direct requires ...`:** عمدی است؛ در حالت `direct` کلیدها از همان ابتدا بررسی می‌شوند. بخش «کلید مستقیم ارائه‌دهنده» را ببینید.
 - **اجرا شد ولی اتصال برقرار نشد:** `LIVEKIT_URL`, `LIVEKIT_API_KEY` و `LIVEKIT_API_SECRET` را چک کنید؛ ایجنت برای dispatch شدن به پروژه‌ی LiveKit نیاز دارد.
