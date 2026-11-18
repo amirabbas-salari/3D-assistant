@@ -41,6 +41,24 @@ except ImportError as exc:  # pragma: no cover - depends on the installed extras
     spatius_plugin = None
     _spatius_import_error = exc
 
+# Direct-provider speech plugins. They bypass the LiveKit Inference gateway, so
+# they keep working when the project's Inference credit quota is exhausted.
+try:
+    from livekit.plugins import deepgram as deepgram_plugin
+
+    _deepgram_import_error = None
+except ImportError as exc:  # pragma: no cover - depends on the installed extras
+    deepgram_plugin = None
+    _deepgram_import_error = exc
+
+try:
+    from livekit.plugins import google as google_plugin
+
+    _google_import_error = None
+except ImportError as exc:  # pragma: no cover - depends on the installed extras
+    google_plugin = None
+    _google_import_error = exc
+
 load_dotenv()
 
 server = agents.AgentServer()
@@ -156,6 +174,112 @@ async def start_avatar(provider: str, session: AgentSession, room: rtc.Room, job
     return None
 
 
+def _speech_provider() -> str:
+    """Where STT and TTS come from: "inference" (LiveKit gateway) or "direct".
+
+    The Build-plan allowance for LiveKit Inference is a hard monthly cap: once
+    it is spent the gateway rejects every STT and TTS connection with
+    429 "credit quota exhausted" and nothing in the SDK can recover. Pointing
+    the same two models at the providers' own APIs avoids that ceiling at the
+    cost of one extra key each.
+    """
+    provider = os.getenv("SPEECH_PROVIDER", "inference").strip().lower()
+    return "direct" if provider in {"direct", "byok", "provider", "own-keys"} else "inference"
+
+
+def build_stt(provider: str, *, model: str, language: str, conn_options: APIConnectOptions,
+              fallback: list[str], job_logger):
+    """Build the STT model for the selected speech provider."""
+    if provider == "direct":
+        api_key = os.getenv("DEEPGRAM_API_KEY", "").strip()
+        if not api_key:
+            raise RuntimeError(
+                "SPEECH_PROVIDER=direct needs DEEPGRAM_API_KEY (STT). "
+                "Set it in .env or switch back to SPEECH_PROVIDER=inference."
+            )
+        if deepgram_plugin is None:
+            raise RuntimeError(
+                "livekit-plugins-deepgram could not be imported "
+                f"({_deepgram_import_error}); run pip install -r requirements.txt"
+            )
+        # The Inference model name is "provider/model"; the plugin wants the bare model.
+        model_name = model.split("/", 1)[-1] if "/" in model else model
+        job_logger.info("STT via Deepgram API directly (model=%s, language=%s)", model_name, language)
+        return deepgram_plugin.STT(model=model_name, language=language, api_key=api_key)
+
+    return inference.STT(
+        model=model,
+        language=language,
+        conn_options=conn_options,
+        # fallback must be omitted (not None) when unused: the plugin parses
+        # every given value as a model name.
+        **({"fallback": fallback} if fallback else {}),
+    )
+
+
+def build_tts(provider: str, *, model: str, voice: str, language: str,
+              conn_options: APIConnectOptions, job_logger):
+    """Build the TTS model for the selected speech provider."""
+    if provider == "direct":
+        api_key = os.getenv("GOOGLE_API_KEY", "").strip()
+        if not api_key:
+            raise RuntimeError(
+                "SPEECH_PROVIDER=direct needs GOOGLE_API_KEY (TTS). "
+                "Set it in .env or switch back to SPEECH_PROVIDER=inference."
+            )
+        if google_plugin is None:
+            raise RuntimeError(
+                "livekit-plugins-google could not be imported "
+                f"({_google_import_error}); run pip install -r requirements.txt"
+            )
+        model_name = model.split("/", 1)[-1] if "/" in model else model
+        # GeminiTTS has no language parameter: the voices are multilingual and the
+        # language comes from the text, so LIVEKIT_TTS_LANGUAGE only applies to
+        # the Inference path. Logged so the difference is not a surprise.
+        job_logger.info(
+            "TTS via Google Gemini API directly (model=%s, voice=%s); Gemini picks the "
+            "language from the text, so the %s setting is not sent",
+            model_name, voice, language,
+        )
+        return google_plugin.beta.GeminiTTS(
+            model=model_name,
+            voice_name=voice,
+            api_key=api_key,
+        )
+
+    return inference.TTS(
+        model=model,
+        voice=voice,
+        language=language,
+        conn_options=conn_options,
+    )
+
+
+def _validate_speech_config() -> None:
+    """Fail at worker startup, not in the middle of the first session.
+
+    A missing key in ``direct`` mode would otherwise only surface once a user
+    joins, as a dead microphone. Raising here means ``python agent.py dev``
+    prints the fix before anything else happens.
+    """
+    if _speech_provider() != "direct":
+        return
+    missing = [
+        name
+        for name in ("DEEPGRAM_API_KEY", "GOOGLE_API_KEY")
+        if not (os.getenv(name) or "").strip()
+    ]
+    if missing:
+        raise RuntimeError(
+            f"SPEECH_PROVIDER=direct requires {', '.join(missing)}. "
+            "Add them to .env, or set SPEECH_PROVIDER=inference to use the "
+            "LiveKit Inference gateway instead."
+        )
+
+
+_validate_speech_config()
+
+
 class PersianAssistant(Agent):
     def __init__(self) -> None:
         super().__init__(
@@ -256,20 +380,35 @@ async def entrypoint(ctx: agents.JobContext) -> None:
         max_unrecoverable_errors=int(os.getenv("LIVEKIT_MAX_UNRECOVERABLE_ERRORS", "8")),
     )
 
+    speech_provider = _speech_provider()
+    stt = build_stt(
+        speech_provider,
+        model=stt_model,
+        language=stt_language,
+        conn_options=inference_conn_options,
+        fallback=stt_fallback_models,
+        job_logger=job_logger,
+    )
+    tts = build_tts(
+        speech_provider,
+        model=tts_model,
+        voice=tts_voice,
+        language=tts_language,
+        conn_options=inference_conn_options,
+        job_logger=job_logger,
+    )
+
     job_logger.info(
-        "Voice pipeline models: STT=LiveKit Inference/%s (%s), LLM=Cloudflare Workers AI/%s (max_tokens=%s), TTS=LiveKit Inference/%s voice=%s (%s)",
-        stt_model, stt_language, llm_model, llm_max_tokens, tts_model, tts_voice, tts_language,
+        "Voice pipeline models: STT=%s/%s (%s), LLM=Cloudflare Workers AI/%s (max_tokens=%s), TTS=%s/%s voice=%s (%s)",
+        "Deepgram API" if speech_provider == "direct" else "LiveKit Inference",
+        stt_model, stt_language,
+        llm_model, llm_max_tokens,
+        "Google API" if speech_provider == "direct" else "LiveKit Inference",
+        tts_model, tts_voice, tts_language,
     )
 
     session = AgentSession(
-        # fallback must be omitted (not None) when unused: the plugin parses
-        # every given value as a model name.
-        stt=inference.STT(
-            model=stt_model,
-            language=stt_language,
-            conn_options=inference_conn_options,
-            **({"fallback": stt_fallback_models} if stt_fallback_models else {}),
-        ),
+        stt=stt,
         llm=openai.LLM(
             model=llm_model,
             api_key=cloudflare_api_token,
@@ -277,12 +416,7 @@ async def entrypoint(ctx: agents.JobContext) -> None:
             # Workers AI otherwise defaults to 256 output tokens for this model.
             extra_body={"max_tokens": llm_max_tokens},
         ),
-        tts=inference.TTS(
-            model=tts_model,
-            voice=tts_voice,
-            language=tts_language,
-            conn_options=inference_conn_options,
-        ),
+        tts=tts,
         conn_options=session_conn_options,
     )
 
