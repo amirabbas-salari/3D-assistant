@@ -32,17 +32,17 @@ app.get('/api/health', (_req, res) => {
     spatiusAvatarId: process.env.SPATIUS_AVATAR_ID || null,
     sttModel: process.env.LIVEKIT_STT_MODEL || 'deepgram/nova-3',
     sttLanguage: process.env.LIVEKIT_STT_LANGUAGE || 'fa',
-    ttsProvider: 'Microsoft Edge TTS',
-    ttsModel: 'edge-tts',
-    ttsVoice: process.env.EDGE_TTS_VOICE || 'fa-IR-DilaraNeural',
-    ttsLanguage: 'fa-IR',
-    edgeTtsConfigured: true,
+    ttsProvider: 'LiveKit Inference',
+    ttsModel: process.env.LIVEKIT_TTS_MODEL || 'google/gemini-3.8-flash-lite-tts',
+    ttsVoice: process.env.LIVEKIT_TTS_VOICE || 'Kore',
+    ttsLanguage: process.env.LIVEKIT_TTS_LANGUAGE || 'fa',
+    livekitTtsConfigured: Boolean(process.env.LIVEKIT_URL && process.env.LIVEKIT_API_KEY && process.env.LIVEKIT_API_SECRET),
   });
 });
 
 app.post('/api/session', async (req, res) => {
   if (!isConfigured()) {
-    return res.status(503).json({ error: 'برای شروع، اطلاعات LiveKit، Spatius و Cloudflare Workers AI را در فایل .env تنظیم کنید؛ Microsoft Edge TTS به API key نیاز ندارد.' });
+    return res.status(503).json({ error: 'برای شروع، اطلاعات LiveKit، Spatius و Cloudflare Workers AI را در فایل .env تنظیم کنید؛ TTS از LiveKit Inference استفاده می‌کند و کلید جداگانه‌ی ارائه‌دهنده لازم ندارد.' });
   }
 
   const roomName = `hamrah-${randomUUID().slice(0, 12)}`;
