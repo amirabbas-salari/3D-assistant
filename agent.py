@@ -8,7 +8,15 @@ import re
 
 from dotenv import load_dotenv
 from livekit import agents, rtc
-from livekit.agents import Agent, AgentSession, RoomOutputOptions, inference
+from livekit.agents import (
+    APIConnectOptions,
+    APIStatusError,
+    Agent,
+    AgentSession,
+    RoomOutputOptions,
+    SessionConnectOptions,
+    inference,
+)
 from livekit.plugins import openai, spatius
 
 load_dotenv()
@@ -49,7 +57,8 @@ class PersianAssistant(Agent):
     def __init__(self) -> None:
         super().__init__(
             instructions=(
-                "تو همراه، یک دستیار صوتی فارسی‌زبان، صمیمی، باهوش و دقیق هستی. "
+                "تو همراه، یک دستیار صوتی فارسی‌زبان با صدای مرد، صمیمی، باهوش و دقیق هستی. "
+                "هرگاه درباره‌ی جنسیت یا صدای خودت پرسیدند، بگو صدای مرد داری. "
                 "همیشه به فارسی روان و طبیعی پاسخ بده، مگر اینکه کاربر صریحاً زبان دیگری بخواهد. "
                 "پاسخ‌های معمولی را برای گفتار کوتاه و روشن نگه دار؛ از نشانه‌گذاری و قالب‌بندی پیچیده پرهیز کن. "
                 "اگر کاربر متنی را برای روخوانی، تکرار یا بازگویی می‌فرستد، متن را کامل و بدون خلاصه‌کردن یا حذف در پاسخ بیاور تا TTS آن را بخواند. "
@@ -93,6 +102,13 @@ async def entrypoint(ctx: agents.JobContext) -> None:
 
     stt_model = os.getenv("LIVEKIT_STT_MODEL", "deepgram/nova-3")
     stt_language = os.getenv("LIVEKIT_STT_LANGUAGE", "fa")
+    # Comma-separated Inference model names tried server-side when the primary
+    # provider for the language fails, e.g. "assemblyai/universal-streaming".
+    stt_fallback_models = [
+        item.strip()
+        for item in os.getenv("LIVEKIT_STT_FALLBACK", "").split(",")
+        if item.strip()
+    ]
     cloudflare_account_id = os.getenv("CLOUDFLARE_ACCOUNT_ID", "").strip()
     cloudflare_api_token = os.getenv("CLOUDFLARE_API_TOKEN", "").strip()
     llm_model = os.getenv(
@@ -113,8 +129,29 @@ async def entrypoint(ctx: agents.JobContext) -> None:
     )
 
     tts_model = os.getenv("LIVEKIT_TTS_MODEL", "google/gemini-3.8-flash-lite-tts").strip()
-    tts_voice = os.getenv("LIVEKIT_TTS_VOICE", "Kore").strip() or "Kore"
+    # Charon is a male Gemini voice; Kore (the previous default) is female.
+    tts_voice = os.getenv("LIVEKIT_TTS_VOICE", "Charon").strip() or "Charon"
     tts_language = os.getenv("LIVEKIT_TTS_LANGUAGE", "fa").strip() or "fa"
+
+    # LiveKit Inference rejects connections with HTTP 429 once the project's
+    # concurrent STT/TTS limit is reached. The SDK retries a few times with a
+    # fixed short interval and then gives up for the rest of the turn, which is
+    # what turns a brief burst into a dead microphone in the middle of a session.
+    # Waiting longer and retrying more keeps the session alive across a burst.
+    inference_conn_options = APIConnectOptions(
+        max_retry=int(os.getenv("LIVEKIT_INFERENCE_MAX_RETRY", "6")),
+        retry_interval=float(os.getenv("LIVEKIT_INFERENCE_RETRY_INTERVAL", "3.0")),
+        timeout=float(os.getenv("LIVEKIT_INFERENCE_TIMEOUT", "15.0")),
+    )
+    # The retry loop a stream actually runs on is the one the session hands it,
+    # not the one on the STT/TTS object (that only becomes a hint sent to the
+    # gateway), so the same options must also reach AgentSession.
+    session_conn_options = SessionConnectOptions(
+        stt_conn_options=inference_conn_options,
+        tts_conn_options=inference_conn_options,
+        # A short burst used to close the whole session after three failures.
+        max_unrecoverable_errors=int(os.getenv("LIVEKIT_MAX_UNRECOVERABLE_ERRORS", "8")),
+    )
 
     job_logger.info(
         "Voice pipeline models: STT=LiveKit Inference/%s (%s), LLM=Cloudflare Workers AI/%s (max_tokens=%s), TTS=LiveKit Inference/%s voice=%s (%s)",
@@ -122,7 +159,14 @@ async def entrypoint(ctx: agents.JobContext) -> None:
     )
 
     session = AgentSession(
-        stt=inference.STT(model=stt_model, language=stt_language),
+        # fallback must be omitted (not None) when unused: the plugin parses
+        # every given value as a model name.
+        stt=inference.STT(
+            model=stt_model,
+            language=stt_language,
+            conn_options=inference_conn_options,
+            **({"fallback": stt_fallback_models} if stt_fallback_models else {}),
+        ),
         llm=openai.LLM(
             model=llm_model,
             api_key=cloudflare_api_token,
@@ -134,27 +178,36 @@ async def entrypoint(ctx: agents.JobContext) -> None:
             model=tts_model,
             voice=tts_voice,
             language=tts_language,
+            conn_options=inference_conn_options,
         ),
+        conn_options=session_conn_options,
     )
 
     avatar = None
-    spatius_sample_rate = int(os.getenv("SPATIUS_SAMPLE_RATE", "24000"))
-    spatius_audio_format = os.getenv("SPATIUS_AUDIO_FORMAT", "pcm_s16le").strip().lower()
-    try:
-        # PCM avoids requiring a system libopus DLL on Windows. Ogg Opus is optional.
-        avatar = spatius.AvatarSession(
-            sample_rate=spatius_sample_rate,
-            audio_format=spatius_audio_format,
-        )
-        await avatar.start(session, room=ctx.room)
-        job_logger.info(
-            "Spatius avatar session started (audio sample rate: %s Hz, format: %s)",
-            spatius_sample_rate, spatius_audio_format,
-        )
-    except Exception:
-        # Spatius setup errors should not prevent voice/text fallback from running.
-        job_logger.exception("Could not start Spatius avatar; continuing without avatar")
-        avatar = None
+    # The avatar only drives rendering; STT, LLM, and TTS run in full either way.
+    # With it off, the agent's own LiveKit audio output is enabled so you can
+    # focus on the voice pipeline end to end.
+    avatar_enabled = os.getenv("AVATAR_ENABLED", "false").strip().lower() in {"1", "true", "yes", "on"}
+    if not avatar_enabled:
+        job_logger.info("Avatar disabled (AVATAR_ENABLED=false); using direct LiveKit audio output")
+    else:
+        spatius_sample_rate = int(os.getenv("SPATIUS_SAMPLE_RATE", "24000"))
+        spatius_audio_format = os.getenv("SPATIUS_AUDIO_FORMAT", "pcm_s16le").strip().lower()
+        try:
+            # PCM avoids requiring a system libopus DLL on Windows. Ogg Opus is optional.
+            avatar = spatius.AvatarSession(
+                sample_rate=spatius_sample_rate,
+                audio_format=spatius_audio_format,
+            )
+            await avatar.start(session, room=ctx.room)
+            job_logger.info(
+                "Spatius avatar session started (audio sample rate: %s Hz, format: %s)",
+                spatius_sample_rate, spatius_audio_format,
+            )
+        except Exception:
+            # Spatius setup errors should not prevent voice/text fallback from running.
+            job_logger.exception("Could not start Spatius avatar; continuing without avatar")
+            avatar = None
 
     async def publish_user_transcript(event) -> None:
         text = (event.transcript or "").strip()
@@ -169,7 +222,19 @@ async def entrypoint(ctx: agents.JobContext) -> None:
 
     @session.on("error")
     def on_session_error(event) -> None:
-        job_logger.error("AgentSession %s error: %s", event.source, event.error)
+        error = event.error
+        status = getattr(error, "status_code", None)
+        if status == 429:
+            job_logger.error(
+                "LiveKit Inference rejected a request with 429 (source=%s): the "
+                "project hit its concurrent STT/TTS limit. Close extra tabs and "
+                "agent sessions, then retry; see Settings -> Project in the "
+                "LiveKit dashboard for current quotas. %s",
+                event.source,
+                error,
+            )
+            return
+        job_logger.error("AgentSession %s error: %s", event.source, error)
 
     async def publish_assistant_reply(text: str) -> None:
         await publish_room_message({"type": "assistant_reply", "text": text})
@@ -223,7 +288,8 @@ async def entrypoint(ctx: agents.JobContext) -> None:
     await session.start(
         agent=PersianAssistant(),
         room=ctx.room,
-        # Spatius publishes synchronized speech audio; direct LiveKit output is the fallback.
+        # The avatar publishes synchronized speech audio; otherwise the agent
+        # publishes its own TTS audio into the room.
         room_output_options=RoomOutputOptions(audio_enabled=avatar is None),
     )
     job_logger.info("Agent session started and ready for voice or text input")

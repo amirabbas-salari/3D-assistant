@@ -1,8 +1,10 @@
 # همراه — دستیار صوتی و تصویری فارسی
 
-دستیار مکالمه‌ای زنده با رابط فارسی راست‌چین، LLM از Cloudflare Workers AI، STT و TTS از LiveKit Inference، و آواتار زنده‌ی Spatius که در مرورگر با AvatarKit رندر می‌شود. TTS پیش‌فرض `google/gemini-3.8-flash-lite-tts` با صدای `Kore` و زبان `fa` است.
+دستیار مکالمه‌ای زنده با رابط فارسی راست‌چین، LLM از Cloudflare Workers AI، STT و TTS از LiveKit Inference، و آواتار زنده‌ی Spatius که در مرورگر با AvatarKit رندر می‌شود. TTS پیش‌فرض `google/gemini-3.8-flash-lite-tts` با صدای مرد `Charon` و زبان `fa` است.
 
 برای LiveKit Inference نیازی به کلید API جداگانه‌ی ارائه‌دهنده‌ی TTS نیست؛ احراز هویت با اطلاعات LiveKit انجام می‌شود و مصرف از طریق LiveKit مدیریت می‌شود. مرورگر فقط شناسه‌های عمومی Spatius (App ID و Avatar ID) و یک توکن کوتاه‌عمر LiveKit محدود به همان room دریافت می‌کند.
+
+> **حالت فعلی: آواتار خاموش است.** `AVATAR_ENABLED=false` آواتار Spatius را کامل غیرفعال می‌کند تا روی STT، LLM و TTS تمرکز شود. در این حالت Agent خودش صدای TTS را در room منتشر می‌کند و مرورگر فقط صدا و متن را نشان می‌دهد. برای برگرداندن آواتار، همان متغیر را `true` کنید.
 
 ## پیش‌نیازها
 
@@ -41,17 +43,47 @@ npm run build
 NODE_ENV=production npm start
 ```
 
+## خاموش‌کردن موقت آواتار
+
+برای تمرکز روی موتور گفتار، آواتار را با یک متغیر خاموش کنید:
+
+```env
+AVATAR_ENABLED=false
+```
+
+این مقدار در سه جا خوانده می‌شود و هر سه با هم هماهنگ می‌مانند:
+
+- `agent.py` جلسه‌ی Spatius را نمی‌سازد و به‌جای آن صدای TTS خودش را در LiveKit منتشر می‌کند (`audio_enabled=True`).
+- `server/index.js` دیگر برای ساخت جلسه به `SPATIUS_API_KEY`, `SPATIUS_APP_ID` و `SPATIUS_AVATAR_ID` نیاز ندارد؛ نبودشان مانع شروع جلسه نیست. مقدار `avatarEnabled` در `/api/health` گزارش می‌شود.
+- رابط کاربری پنل آواتار را پنهان می‌کند و به‌جایش کارت «صدا و متن» با وضعیت ترک صوتی نشان می‌دهد. المان پخش صدای remote در هر دو حالت فعال می‌ماند، وگرنه صدای دستیار قطع می‌شود.
+
+مزیت این حالت برای آزمایش: صدای TTS مستقیم از LiveKit پخش می‌شود و Spatius در مسیر نیست، پس هر مشکل صدا یا متن فقط می‌تواند از STT، LLM یا TTS باشد.
+
+برای روشن‌کردن دوباره‌ی آواتار: `AVATAR_ENABLED=true` بگذارید و مطمئن شوید هر سه مقدار Spatius در `.env` پر هستند.
+
+## خطای ۴۲۹ در STT و TTS (سقف اتصال LiveKit Inference)
+
+روی پلن Build، LiveKit Inference برای هر پروژه **۵ اتصال هم‌زمان STT** و **۵ اتصال هم‌زمان TTS** مجاز می‌داند. هر Agent در حال اجرا یک اتصال STT و یک اتصال TTS نگه می‌دارد، و هر نشستی که با `POST /api/session` ساخته می‌شود یک Agent جدا دارد. پس چند نشست رهاشده (تب بسته‌شده، ری‌لود صفحه، یا نشستی که با «پایان نشست» تمام نشده) سقف را پر می‌کند و هر اتصال جدید با `429 Too Many Requests` رد می‌شود. سهمیه‌ی پروژه‌های رایگان بین همه‌ی پروژه‌های همان حساب تقسیم می‌شود و در داشبورد LiveKit، بخش **Settings → Project** دیده می‌شود.
+
+این نسخه سه کار برای همین حالت انجام می‌دهد:
+
+- **تلاش مجدد صبورانه**: `LIVEKIT_INFERENCE_MAX_RETRY`, `LIVEKIT_INFERENCE_RETRY_INTERVAL` و `LIVEKIT_INFERENCE_TIMEOUT` مقدارهای `APIConnectOptions` را تعیین می‌کنند و همان مقدارها هم روی خود مدل‌ها و هم روی `AgentSession` (`SessionConnectOptions`) گذاشته می‌شوند. مقدار روی مدل فقط به‌عنوان hint به گیت‌وی فرستاده می‌شود؛ حلقه‌ی تلاش مجددی که واقعاً اجرا می‌شود همان است که جلسه به stream می‌دهد. `LIVEKIT_MAX_UNRECOVERABLE_ERRORS` هم تعیین می‌کند چند خطای غیرقابل‌بازیابی پشت سر هم بگذرد تا کل جلسه بسته شود (پیش‌فرض `8`؛ قبلاً `3` بود و یک burst کوتاه جلسه را می‌بست).
+- **مدل جایگزین STT**: `LIVEKIT_STT_FALLBACK` فهرست جداشده با ویرگول از مدل‌های Inference است که سمت سرور امتحان می‌شوند، مثلاً `assemblyai/universal-streaming`. خالی بماند، هیچ fallback فرستاده نمی‌شود.
+- **بستن نشست‌های رهاشده**: دکمه‌ی «بستن نشست‌های باز قبلی» در پنل «صدا و متن» و اندپوینت `POST /api/sessions/cleanup` همه‌ی roomهای با پیشوند `hamrah-` را پاک می‌کنند و Agentهایشان را هم می‌بندند. اگر ۴۲۹ تکرار شد، اول این دکمه را بزنید، بعد دوباره نشست را شروع کنید. همچنین `startSession` با یک قفل داخلی از دو بار کلیک هم‌زمان جلوگیری می‌کند تا در یک نشست دو Agent ساخته نشود.
+
+اگر ۴۲۹ بعد از خالی‌شدن نشست‌ها هم ادامه داشت، سهمیه‌ی پروژه تمام شده است؛ در داشبورد LiveKit بخش Settings → Project را ببینید یا مدل STT/TTS را به ارائه‌دهنده‌ی دیگری با کلید مستقیم تغییر دهید.
+
 ## تنظیم Spatius و LiveKit Inference TTS
 
 1. در LiveKit Cloud یک project بسازید و `LIVEKIT_URL`, `LIVEKIT_API_KEY`, `LIVEKIT_API_SECRET` را در `.env` قرار دهید. LiveKit Inference برای TTS از همین اطلاعات استفاده می‌کند و به Google API key جداگانه نیاز ندارد.
 2. در Spatius Studio یک App بسازید و `SPATIUS_API_KEY`, `SPATIUS_APP_ID` و `SPATIUS_AVATAR_ID` را تنظیم کنید. API key فقط در سرور و Agent می‌ماند. ناحیه به‌صورت خودکار انتخاب می‌شود؛ در صورت نیاز `SPATIUS_REGION` را تنظیم کنید. قالب صدای ورودی پیش‌فرض `pcm_s16le` است تا به DLL بومی Opus وابسته نباشد. اگر `ogg_opus` را انتخاب کردید، نرخ‌های مجاز `8000`, `12000`, `16000`, `24000` و `48000` هرتز هستند و سیستم باید libopus داشته باشد.
-3. مدل و صدای TTS را با `LIVEKIT_TTS_MODEL`, `LIVEKIT_TTS_VOICE` و `LIVEKIT_TTS_LANGUAGE` تنظیم کنید. پیش‌فرض‌ها به‌ترتیب `google/gemini-3.8-flash-lite-tts`, `Kore` و `fa` هستند. این مدل LiveKit Inference زبان فارسی را پشتیبانی می‌کند.
+3. مدل و صدای TTS را با `LIVEKIT_TTS_MODEL`, `LIVEKIT_TTS_VOICE` و `LIVEKIT_TTS_LANGUAGE` تنظیم کنید. پیش‌فرض‌ها به‌ترتیب `google/gemini-3.8-flash-lite-tts`, `Charon` و `fa` هستند. `Charon` صدای مرد است؛ صدای قبلی `Kore` زنانه بود. صداهای مرد دیگر Gemini عبارت‌اند از `Orus`, `Fenrir`, `Puck`, `Iapetus`, `Algenib`, `Schedar` و `Achird`. این مدل LiveKit Inference زبان فارسی را پشتیبانی می‌کند.
 4. در Cloudflare مقدار `CLOUDFLARE_ACCOUNT_ID` و توکن دارای مجوز Workers AI را تنظیم کنید. سقف خروجی LLM با `CLOUDFLARE_LLM_MAX_TOKENS` کنترل می‌شود و پیش‌فرض آن `8192` است؛ این مقدار صریحاً برای جلوگیری از سقف پیش‌فرض 256 توکنی Workers AI فرستاده می‌شود. برای روخوانی، Agent باید متن کامل را در پاسخ تولید کند؛ TTS فقط همان پاسخ تولیدشده را می‌خواند.
 5. Agent با نام `hamrah-agent` dispatch می‌شود؛ همین نام را با `LIVEKIT_AGENT_NAME` هماهنگ نگه دارید.
 
 مدل‌های پیش‌فرض:
 - STT: `deepgram/nova-3` با زبان `fa` از LiveKit Inference
-- TTS: `google/gemini-3.8-flash-lite-tts` با صدای `Kore` و زبان `fa` از LiveKit Inference
+- TTS: `google/gemini-3.8-flash-lite-tts` با صدای مرد `Charon` و زبان `fa` از LiveKit Inference
 - LLM: `@cf/meta/llama-3.3-70b-instruct-fp8-fast` از Cloudflare Workers AI
 
 Agent به LiveKit وصل می‌شود، STT و TTS را از LiveKit Inference می‌گیرد و جلسه‌ی Spatius را برای همگام‌سازی حرکت آواتار راه می‌اندازد. فرانت‌اند با `@spatius/avatarkit-rtc` ترک حرکت LiveKit را دریافت می‌کند و AvatarKit آواتار را در مرورگر رندر می‌کند.
@@ -82,5 +114,6 @@ Agent به LiveKit وصل می‌شود، STT و TTS را از LiveKit Inference
 
 - `GET /api/health` — وضعیت پیکربندی، بدون افشای رازها
 - `POST /api/session` — ساخت LiveKit room، dispatch کردن Agent و برگرداندن JWT کوتاه‌عمر برای همان room به‌همراه شناسه‌های عمومی Spatius
+- `POST /api/sessions/cleanup` — بستن roomهای رهاشده با پیشوند `hamrah-` تا اتصال‌های STT/TTS آزاد شوند
 
 `agent.py` از LiveKit Inference برای STT و TTS، Cloudflare Workers AI برای LLM و پلاگین رسمی `livekit-plugins-spatius` برای آواتار استفاده می‌کند. متن تشخیص‌داده‌شده و پاسخ Agent به‌صورت data packet به رابط فرستاده می‌شوند.
