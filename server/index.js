@@ -25,6 +25,7 @@ app.get('/api/health', (_req, res) => {
     agentName: process.env.LIVEKIT_AGENT_NAME || 'hamrah-agent',
     llmProvider: 'Cloudflare Workers AI',
     llmModel: process.env.CLOUDFLARE_LLM_MODEL || '@cf/meta/llama-3.3-70b-instruct-fp8-fast',
+    llmMaxTokens: Number(process.env.CLOUDFLARE_LLM_MAX_TOKENS || 8192),
     cloudflareConfigured: Boolean(process.env.CLOUDFLARE_ACCOUNT_ID && process.env.CLOUDFLARE_API_TOKEN),
     avatarProvider: 'Spatius',
     spatiusConfigured: Boolean(process.env.SPATIUS_API_KEY && process.env.SPATIUS_APP_ID && process.env.SPATIUS_AVATAR_ID),
