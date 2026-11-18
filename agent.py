@@ -19,6 +19,8 @@ from livekit.agents import (
 )
 from livekit.plugins import openai
 
+from latency import LatencyTracker
+
 # Avatar plugins MUST be imported here, not inside the job: every plugin registers
 # itself on import and Plugin.register_plugin() insists on the main thread. On
 # Windows LiveKit runs jobs in threads (JobExecutorType.THREAD), so a lazy import
@@ -327,6 +329,14 @@ async def entrypoint(ctx: agents.JobContext) -> None:
 
     ctx.add_shutdown_callback(detach_room_log_handler)
 
+    latency = LatencyTracker(job_logger)
+    if latency.enabled:
+        job_logger.info(
+            "Latency instrumentation on: per-turn millisecond stages, summary every %s turns "
+            "(LATENCY_LOG, LATENCY_REPORT_INTERVAL)",
+            latency.report_interval or "∞",
+        )
+
     stt_model = os.getenv("LIVEKIT_STT_MODEL", "deepgram/nova-3")
     stt_language = os.getenv("LIVEKIT_STT_LANGUAGE", "fa")
     # Comma-separated Inference model names tried server-side when the primary
@@ -407,6 +417,31 @@ async def entrypoint(ctx: agents.JobContext) -> None:
         tts_model, tts_voice, tts_language,
     )
 
+    # Latency knobs, off by default so behaviour is unchanged until measured.
+    # The endpointing wait is often what the latency log fingers first: with the
+    # default streaming turn detector the session waits min_delay=0.3 s (up to
+    # max_delay=2.5 s) of silence after the last speech before it even starts the
+    # LLM, and that wait is invisible unless it is measured.
+    turn_handling: dict = {}
+    min_endpointing = os.getenv("AGENT_MIN_ENDPOINTING_DELAY", "").strip()
+    max_endpointing = os.getenv("AGENT_MAX_ENDPOINTING_DELAY", "").strip()
+    if min_endpointing or max_endpointing:
+        endpointing: dict = {}
+        if min_endpointing:
+            endpointing["min_delay"] = float(min_endpointing)
+        if max_endpointing:
+            endpointing["max_delay"] = float(max_endpointing)
+        turn_handling["endpointing"] = endpointing
+    preemptive_tts = os.getenv("AGENT_PREEMPTIVE_TTS", "").strip().lower()
+    if preemptive_tts in {"1", "true", "yes", "on"}:
+        # Start TTS before the turn is confirmed. Hides the first-sentence cost
+        # at the price of synthesising speech the user may never hear.
+        turn_handling["preemptive_generation"] = {"preemptive_tts": True}
+    if turn_handling:
+        job_logger.info(
+            "Turn handling overrides: %s", json.dumps(turn_handling, ensure_ascii=False)
+        )
+
     session = AgentSession(
         stt=stt,
         llm=openai.LLM(
@@ -418,6 +453,7 @@ async def entrypoint(ctx: agents.JobContext) -> None:
         ),
         tts=tts,
         conn_options=session_conn_options,
+        **({"turn_handling": turn_handling} if turn_handling else {}),
     )
 
     # The avatar only drives rendering; STT, LLM, and TTS run in full either way.
@@ -476,6 +512,11 @@ async def entrypoint(ctx: agents.JobContext) -> None:
             return
         job_logger.error("AgentSession %s error: %s", event.source, error)
 
+    async def publish_latency() -> None:
+        await publish_room_message(
+            {"type": "latency", **latency.as_dict()}, topic="diagnostics"
+        )
+
     async def publish_assistant_reply(text: str) -> None:
         await publish_room_message({"type": "assistant_reply", "text": text})
 
@@ -487,9 +528,23 @@ async def entrypoint(ctx: agents.JobContext) -> None:
             text = (getattr(item, "text_content", "") or "").strip()
             if text:
                 job_logger.info("User turn committed (%d characters)", len(text))
+            # Endpointing and transcription timing live on the user message;
+            # hold them until the assistant message closes the same turn.
+            latency.note_user_turn(getattr(item, "metrics", None))
         elif role == "assistant":
             text = (getattr(item, "text_content", "") or "").strip()
             job_logger.info("LLM produced assistant text (%d characters)", len(text))
+            latency.record_turn(
+                getattr(item, "metrics", None),
+                reply_text=text,
+                interrupted=bool(getattr(item, "interrupted", False)),
+                stt_model=stt_model,
+                llm_model=llm_model,
+                tts_model=tts_model,
+            )
+            # Publish after recording, not when speech starts: the metrics for a
+            # turn only exist once its assistant message is complete.
+            asyncio.create_task(publish_latency())
             if text:
                 asyncio.create_task(publish_assistant_reply(text))
 
