@@ -44,9 +44,9 @@ NODE_ENV=production npm start
 ## تنظیم Spatius و LiveKit Inference TTS
 
 1. در LiveKit Cloud یک project بسازید و `LIVEKIT_URL`, `LIVEKIT_API_KEY`, `LIVEKIT_API_SECRET` را در `.env` قرار دهید. LiveKit Inference برای TTS از همین اطلاعات استفاده می‌کند و به Google API key جداگانه نیاز ندارد.
-2. در Spatius Studio یک App بسازید و `SPATIUS_API_KEY`, `SPATIUS_APP_ID` و `SPATIUS_AVATAR_ID` را تنظیم کنید. API key فقط در سرور و Agent می‌ماند. ناحیه به‌صورت خودکار انتخاب می‌شود؛ در صورت نیاز `SPATIUS_REGION` را تنظیم کنید. نرخ خروجی آواتار پیش‌فرض `24000` هرتز است؛ نرخ‌های مجاز `8000`, `12000`, `16000`, `24000` و `48000` هستند.
+2. در Spatius Studio یک App بسازید و `SPATIUS_API_KEY`, `SPATIUS_APP_ID` و `SPATIUS_AVATAR_ID` را تنظیم کنید. API key فقط در سرور و Agent می‌ماند. ناحیه به‌صورت خودکار انتخاب می‌شود؛ در صورت نیاز `SPATIUS_REGION` را تنظیم کنید. قالب صدای ورودی پیش‌فرض `pcm_s16le` است تا به DLL بومی Opus وابسته نباشد. اگر `ogg_opus` را انتخاب کردید، نرخ‌های مجاز `8000`, `12000`, `16000`, `24000` و `48000` هرتز هستند و سیستم باید libopus داشته باشد.
 3. مدل و صدای TTS را با `LIVEKIT_TTS_MODEL`, `LIVEKIT_TTS_VOICE` و `LIVEKIT_TTS_LANGUAGE` تنظیم کنید. پیش‌فرض‌ها به‌ترتیب `google/gemini-3.8-flash-lite-tts`, `Kore` و `fa` هستند. این مدل LiveKit Inference زبان فارسی را پشتیبانی می‌کند.
-4. در Cloudflare مقدار `CLOUDFLARE_ACCOUNT_ID` و توکن دارای مجوز Workers AI را تنظیم کنید.
+4. در Cloudflare مقدار `CLOUDFLARE_ACCOUNT_ID` و توکن دارای مجوز Workers AI را تنظیم کنید. سقف خروجی LLM با `CLOUDFLARE_LLM_MAX_TOKENS` کنترل می‌شود و پیش‌فرض آن `8192` است؛ این مقدار صریحاً برای جلوگیری از سقف پیش‌فرض 256 توکنی Workers AI فرستاده می‌شود. برای روخوانی، Agent باید متن کامل را در پاسخ تولید کند؛ TTS فقط همان پاسخ تولیدشده را می‌خواند.
 5. Agent با نام `hamrah-agent` dispatch می‌شود؛ همین نام را با `LIVEKIT_AGENT_NAME` هماهنگ نگه دارید.
 
 مدل‌های پیش‌فرض:
@@ -56,15 +56,9 @@ NODE_ENV=production npm start
 
 Agent به LiveKit وصل می‌شود، STT و TTS را از LiveKit Inference می‌گیرد و جلسه‌ی Spatius را برای همگام‌سازی حرکت آواتار راه می‌اندازد. فرانت‌اند با `@spatius/avatarkit-rtc` ترک حرکت LiveKit را دریافت می‌کند و AvatarKit آواتار را در مرورگر رندر می‌کند.
 
-### عیب‌یابی Opus در ویندوز
+### صدای Spatius در ویندوز
 
-Spatius برای فرستادن صدای آواتار به کدگذار Ogg Opus و کتابخانه‌ی بومی `libopus` نیاز دارد. نصب `opuslib-next` به‌تنهایی DLL را نصب نمی‌کند. اگر `ctypes.util.find_library('opus')` مقدار `None` داد، یک DLL x64 به نام `opus.dll` در مسیری که در `PATH` است قرار دهید و در همان PowerShell بررسی کنید:
-
-```powershell
-python -c "import ctypes.util; print(ctypes.util.find_library('opus')); import opuslib_next; print('Opus OK')"
-```
-
-این نیازمندی مربوط به Spatius است و با انتخاب مدل TTS تغییر نمی‌کند.
+قالب پیش‌فرض `pcm_s16le` از نیاز به نصب جداگانه‌ی `libopus` روی ویندوز جلوگیری می‌کند. در صورت انتخاب `SPATIUS_AUDIO_FORMAT=ogg_opus`، باید کتابخانه‌ی بومی Opus در دسترس Python باشد؛ در غیر این صورت ارسال صدا به Spatius متوقف می‌شود و آواتار ممکن است بی‌حرکت بماند.
 
 چت متنی مستقیم نیز در دسترس است. اگر اجازه‌ی میکروفون رد شود یا ورودی صوتی در دسترس نباشد، کاربر می‌تواند متن بفرستد.
 

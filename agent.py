@@ -51,7 +51,9 @@ class PersianAssistant(Agent):
             instructions=(
                 "تو همراه، یک دستیار صوتی فارسی‌زبان، صمیمی، باهوش و دقیق هستی. "
                 "همیشه به فارسی روان و طبیعی پاسخ بده، مگر اینکه کاربر صریحاً زبان دیگری بخواهد. "
-                "جواب‌ها را برای گفتار کوتاه و روشن نگه دار؛ از نشانه‌گذاری و قالب‌بندی پیچیده پرهیز کن. "
+                "پاسخ‌های معمولی را برای گفتار کوتاه و روشن نگه دار؛ از نشانه‌گذاری و قالب‌بندی پیچیده پرهیز کن. "
+                "اگر کاربر متنی را برای روخوانی، تکرار یا بازگویی می‌فرستد، متن را کامل و بدون خلاصه‌کردن یا حذف در پاسخ بیاور تا TTS آن را بخواند. "
+                "در این حالت هرگز نگو امکان پخش یا خواندن صدا را نداری. "
                 "اگر پاسخ را نمی‌دانی، صادقانه بگو."
             ),
         )
@@ -97,6 +99,12 @@ async def entrypoint(ctx: agents.JobContext) -> None:
         "CLOUDFLARE_LLM_MODEL",
         "@cf/meta/llama-3.3-70b-instruct-fp8-fast",
     ).strip()
+    try:
+        llm_max_tokens = int(os.getenv("CLOUDFLARE_LLM_MAX_TOKENS", "8192"))
+    except ValueError as exc:
+        raise RuntimeError("CLOUDFLARE_LLM_MAX_TOKENS must be a positive integer") from exc
+    if not 1 <= llm_max_tokens <= 24000:
+        raise RuntimeError("CLOUDFLARE_LLM_MAX_TOKENS must be between 1 and 24000")
     if not cloudflare_account_id or not cloudflare_api_token:
         raise RuntimeError(
             "CLOUDFLARE_ACCOUNT_ID and CLOUDFLARE_API_TOKEN are required for Cloudflare Workers AI"
@@ -106,17 +114,23 @@ async def entrypoint(ctx: agents.JobContext) -> None:
     )
 
     tts_model = os.getenv("LIVEKIT_TTS_MODEL", "google/gemini-3.8-flash-lite-tts").strip()
-    tts_voice = os.getenv("LIVEKIT_TTS_VOICE", "Kore").strip()
-    tts_language = os.getenv("LIVEKIT_TTS_LANGUAGE", "fa").strip()
+    tts_voice = os.getenv("LIVEKIT_TTS_VOICE", "Kore").strip() or "Kore"
+    tts_language = os.getenv("LIVEKIT_TTS_LANGUAGE", "fa").strip() or "fa"
 
     job_logger.info(
-        "Voice pipeline models: STT=LiveKit Inference/%s (%s), LLM=Cloudflare Workers AI/%s, TTS=LiveKit Inference/%s voice=%s (%s)",
-        stt_model, stt_language, llm_model, tts_model, tts_voice, tts_language,
+        "Voice pipeline models: STT=LiveKit Inference/%s (%s), LLM=Cloudflare Workers AI/%s (max_tokens=%s), TTS=LiveKit Inference/%s voice=%s (%s)",
+        stt_model, stt_language, llm_model, llm_max_tokens, tts_model, tts_voice, tts_language,
     )
 
     session = AgentSession(
         stt=inference.STT(model=stt_model, language=stt_language),
-        llm=openai.LLM(model=llm_model, api_key=cloudflare_api_token, base_url=cloudflare_base_url),
+        llm=openai.LLM(
+            model=llm_model,
+            api_key=cloudflare_api_token,
+            base_url=cloudflare_base_url,
+            # Workers AI otherwise defaults to 256 output tokens for this model.
+            extra_body={"max_tokens": llm_max_tokens},
+        ),
         tts=inference.TTS(
             model=tts_model,
             voice=tts_voice,
@@ -126,13 +140,17 @@ async def entrypoint(ctx: agents.JobContext) -> None:
 
     avatar = None
     spatius_sample_rate = int(os.getenv("SPATIUS_SAMPLE_RATE", "24000"))
+    spatius_audio_format = os.getenv("SPATIUS_AUDIO_FORMAT", "pcm_s16le").strip().lower()
     try:
-        # LiveKit Inference TTS defaults to 24 kHz PCM, matching the Spatius output rate.
-        avatar = spatius.AvatarSession(sample_rate=spatius_sample_rate)
+        # PCM avoids requiring a system libopus DLL on Windows. Ogg Opus is optional.
+        avatar = spatius.AvatarSession(
+            sample_rate=spatius_sample_rate,
+            audio_format=spatius_audio_format,
+        )
         await avatar.start(session, room=ctx.room)
         job_logger.info(
-            "Spatius avatar session started (audio sample rate: %s Hz)",
-            spatius_sample_rate,
+            "Spatius avatar session started (audio sample rate: %s Hz, format: %s)",
+            spatius_sample_rate, spatius_audio_format,
         )
     except Exception:
         # Spatius setup errors should not prevent voice/text fallback from running.
