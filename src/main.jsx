@@ -41,6 +41,7 @@ function App() {
   const avatarContainerRef = useRef(null);
   const avatarPlayerRef = useRef(null);
   const avatarViewRef = useRef(null);
+  const motionWatchRef = useRef([]);
   const chatRef = useRef(null);
   const logRef = useRef(null);
 
@@ -103,40 +104,65 @@ function App() {
     if (logRef.current) logRef.current.scrollTop = logRef.current.scrollHeight;
   }, [logs]);
 
-  async function probeMotionFrames() {
-    const room = roomRef.current;
-    if (!room) return;
-    const sample = async () => {
-      let received = 0;
-      let decoded = 0;
-      for (const participant of room.remoteParticipants.values()) {
-        for (const publication of participant.videoTrackPublications.values()) {
-          const track = publication.track;
-          if (!track?.getRTCStatsReport) continue;
-          try {
-            const report = await track.getRTCStatsReport();
-            report?.forEach((entry) => {
-              if (entry.type !== 'inbound-rtp') return;
-              received += entry.framesReceived || 0;
-              decoded += entry.framesDecoded || 0;
-            });
-          } catch { /* stats are best-effort diagnostics */ }
+  function motionFrameCount() {
+    const summary = avatarPlayerRef.current?.sessionSummary;
+    return Number(summary?.totalFrames) || 0;
+  }
+
+  // A cheap fingerprint of what is currently drawn. Motion frames can arrive
+  // while nothing reaches the screen, so the picture — not the RTP counter — is
+  // the only honest proof that the avatar is animating.
+  async function canvasSignature() {
+    const view = avatarViewRef.current;
+    if (!view?.exportBitmap) return null;
+    try {
+      const blob = await view.exportBitmap();
+      if (!blob) return null;
+      const bytes = new Uint8Array(await blob.arrayBuffer());
+      let hash = 2166136261;
+      const step = Math.max(1, Math.floor(bytes.length / 8192));
+      for (let i = 0; i < bytes.length; i += step) {
+        hash = Math.imul(hash ^ bytes[i], 16777619);
+      }
+      return String(hash >>> 0);
+    } catch {
+      return null;
+    }
+  }
+
+  function clearMotionWatch() {
+    for (const timer of motionWatchRef.current) window.clearTimeout(timer);
+    motionWatchRef.current = [];
+  }
+
+  // Spatius needs a moment to synthesise motion, so sampling the first second
+  // reports a false negative. Measure a window in the middle of the turn and
+  // compare the rendered pixels across it.
+  function startMotionWatch() {
+    clearMotionWatch();
+    const baseline = motionFrameCount();
+    const timer = window.setTimeout(async () => {
+      const first = await canvasSignature();
+      const later = window.setTimeout(async () => {
+        const second = await canvasSignature();
+        const frames = motionFrameCount() - baseline;
+        const changed = first && second ? first !== second : null;
+        const details = [
+          `فریم حرکت در این بازه: ${frames}`,
+          changed === null ? 'تصویر قابل نمونه‌برداری نبود' : changed ? 'تصویر در حال تغییر است' : 'تصویر تغییر نکرد',
+        ].join(' · ');
+        if (frames === 0) {
+          addLog('warning', 'در این بازه فریم حرکتی به آواتار نرسید', details);
+        } else if (changed === false) {
+          addLog('warning', 'فریم حرکت می‌رسد اما تصویر آواتار تغییر نمی‌کند',
+            `${details} — سمت رندر مشکل دارد، نه شبکه (مثلاً خطای avatar_id یا توقف رندر).`);
+        } else {
+          addLog('success', 'آواتار در حال حرکت است', details);
         }
-      }
-      return { received, decoded };
-    };
-    const before = await sample();
-    window.setTimeout(async () => {
-      const after = await sample();
-      const received = after.received - before.received;
-      const decoded = after.decoded - before.decoded;
-      if (received > 0) {
-        addLog('success', 'فریم‌های حرکت آواتار در حال دریافت است', `در یک ثانیه: ${received} فریم · decoded ${decoded}`);
-      } else {
-        addLog('error', 'هیچ فریم حرکتی در طول صحبت دریافت نشد',
-          'ترک حرکت Spatius متوقف یا پخش‌نشده است؛ لب‌ها تکان نمی‌خورند. adaptiveStream و وضعیت publication را بررسی کنید.');
-      }
-    }, 1000);
+      }, 1200);
+      motionWatchRef.current.push(later);
+    }, 1500);
+    motionWatchRef.current = [timer];
   }
 
   async function startSession() {
@@ -182,6 +208,12 @@ function App() {
         const avatar = await avatarKit.AvatarManager.shared.load(data.spatiusAvatarId);
         const avatarView = new avatarKit.AvatarView(avatar, avatarContainerRef.current);
         avatarViewRef.current = avatarView;
+        // AvatarKit reports render-side failures (mismatched avatar_id, blank
+        // canvas, lost GPU device) only through this callback; without it they
+        // are silent and the face simply never moves.
+        avatarView.controller.onError = (error) => {
+          addLog('error', 'خطای رندر AvatarKit', `${error?.code || 'unknown'} · ${errorMessage(error)}`);
+        };
         await new Promise((resolve, reject) => {
           const timeout = window.setTimeout(() => reject(new Error('رندر اولیه‌ی آواتار Spatius بیش از حد طول کشید')), 20000);
           avatarView.onFirstRendering = () => {
@@ -196,12 +228,12 @@ function App() {
         player.on('conversation-state-changed', (state) => {
           if (state === 'speaking') {
             addLog('info', 'آواتار شروع به صحبت کرد', 'حالت حرکتی Spatius: speaking');
-            // Measure the motion track while it should be moving. Zero new
-            // frames means the track is paused or not arriving; frames arriving
-            // but a static face means a renderer problem instead.
-            void probeMotionFrames();
+            // Spatius needs a moment to synthesise motion, so the window starts
+            // after the turn has begun rather than at the instant it starts.
+            startMotionWatch();
             return;
           }
+          clearMotionWatch();
           const summary = avatarPlayerRef.current?.sessionSummary;
           const frames = summary ? `فریم حرکت: ${summary.totalFrames} · fps≈${summary.avgFps}` : '';
           addLog(summary && summary.totalFrames > 0 ? 'success' : 'warning', 'آواتار به حالت آماده بازگشت', frames);
@@ -327,6 +359,7 @@ function App() {
 
   async function endSession() {
     addLog('info', 'درخواست پایان جلسه');
+    clearMotionWatch();
     try { await avatarPlayerRef.current?.detach(); } catch (error) { addLog('warning', 'جداسازی Spatius ناموفق بود', errorMessage(error)); }
     avatarPlayerRef.current = null;
     avatarViewRef.current?.dispose();
