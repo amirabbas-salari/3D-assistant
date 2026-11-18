@@ -35,7 +35,7 @@ app.get('/api/health', (_req, res) => {
     sttLanguage: process.env.LIVEKIT_STT_LANGUAGE || 'fa',
     ttsProvider: 'LiveKit Inference',
     ttsModel: process.env.LIVEKIT_TTS_MODEL || 'google/gemini-3.8-flash-lite-tts',
-    ttsVoice: process.env.LIVEKIT_TTS_VOICE || 'Kore',
+    ttsVoice: process.env.LIVEKIT_TTS_VOICE || 'Charon',
     ttsLanguage: process.env.LIVEKIT_TTS_LANGUAGE || 'fa',
     livekitTtsConfigured: Boolean(process.env.LIVEKIT_URL && process.env.LIVEKIT_API_KEY && process.env.LIVEKIT_API_SECRET),
   });

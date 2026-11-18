@@ -1,6 +1,6 @@
 # همراه — دستیار صوتی و تصویری فارسی
 
-دستیار مکالمه‌ای زنده با رابط فارسی راست‌چین، LLM از Cloudflare Workers AI، STT و TTS از LiveKit Inference، و آواتار زنده‌ی Spatius که در مرورگر با AvatarKit رندر می‌شود. TTS پیش‌فرض `google/gemini-3.8-flash-lite-tts` با صدای `Kore` و زبان `fa` است.
+دستیار مکالمه‌ای زنده با رابط فارسی راست‌چین، LLM از Cloudflare Workers AI، STT و TTS از LiveKit Inference، و آواتار زنده‌ی Spatius که در مرورگر با AvatarKit رندر می‌شود. TTS پیش‌فرض `google/gemini-3.8-flash-lite-tts` با صدای مرد `Charon` و زبان `fa` است.
 
 برای LiveKit Inference نیازی به کلید API جداگانه‌ی ارائه‌دهنده‌ی TTS نیست؛ احراز هویت با اطلاعات LiveKit انجام می‌شود و مصرف از طریق LiveKit مدیریت می‌شود. مرورگر فقط شناسه‌های عمومی Spatius (App ID و Avatar ID) و یک توکن کوتاه‌عمر LiveKit محدود به همان room دریافت می‌کند.
 
@@ -45,13 +45,13 @@ NODE_ENV=production npm start
 
 1. در LiveKit Cloud یک project بسازید و `LIVEKIT_URL`, `LIVEKIT_API_KEY`, `LIVEKIT_API_SECRET` را در `.env` قرار دهید. LiveKit Inference برای TTS از همین اطلاعات استفاده می‌کند و به Google API key جداگانه نیاز ندارد.
 2. در Spatius Studio یک App بسازید و `SPATIUS_API_KEY`, `SPATIUS_APP_ID` و `SPATIUS_AVATAR_ID` را تنظیم کنید. API key فقط در سرور و Agent می‌ماند. ناحیه به‌صورت خودکار انتخاب می‌شود؛ در صورت نیاز `SPATIUS_REGION` را تنظیم کنید. قالب صدای ورودی پیش‌فرض `pcm_s16le` است تا به DLL بومی Opus وابسته نباشد. اگر `ogg_opus` را انتخاب کردید، نرخ‌های مجاز `8000`, `12000`, `16000`, `24000` و `48000` هرتز هستند و سیستم باید libopus داشته باشد.
-3. مدل و صدای TTS را با `LIVEKIT_TTS_MODEL`, `LIVEKIT_TTS_VOICE` و `LIVEKIT_TTS_LANGUAGE` تنظیم کنید. پیش‌فرض‌ها به‌ترتیب `google/gemini-3.8-flash-lite-tts`, `Kore` و `fa` هستند. این مدل LiveKit Inference زبان فارسی را پشتیبانی می‌کند.
+3. مدل و صدای TTS را با `LIVEKIT_TTS_MODEL`, `LIVEKIT_TTS_VOICE` و `LIVEKIT_TTS_LANGUAGE` تنظیم کنید. پیش‌فرض‌ها به‌ترتیب `google/gemini-3.8-flash-lite-tts`, `Charon` و `fa` هستند. `Charon` صدای مرد است؛ صدای قبلی `Kore` زنانه بود. صداهای مرد دیگر Gemini عبارت‌اند از `Orus`, `Fenrir`, `Puck`, `Iapetus`, `Algenib`, `Schedar` و `Achird`. این مدل LiveKit Inference زبان فارسی را پشتیبانی می‌کند.
 4. در Cloudflare مقدار `CLOUDFLARE_ACCOUNT_ID` و توکن دارای مجوز Workers AI را تنظیم کنید. سقف خروجی LLM با `CLOUDFLARE_LLM_MAX_TOKENS` کنترل می‌شود و پیش‌فرض آن `8192` است؛ این مقدار صریحاً برای جلوگیری از سقف پیش‌فرض 256 توکنی Workers AI فرستاده می‌شود. برای روخوانی، Agent باید متن کامل را در پاسخ تولید کند؛ TTS فقط همان پاسخ تولیدشده را می‌خواند.
 5. Agent با نام `hamrah-agent` dispatch می‌شود؛ همین نام را با `LIVEKIT_AGENT_NAME` هماهنگ نگه دارید.
 
 مدل‌های پیش‌فرض:
 - STT: `deepgram/nova-3` با زبان `fa` از LiveKit Inference
-- TTS: `google/gemini-3.8-flash-lite-tts` با صدای `Kore` و زبان `fa` از LiveKit Inference
+- TTS: `google/gemini-3.8-flash-lite-tts` با صدای مرد `Charon` و زبان `fa` از LiveKit Inference
 - LLM: `@cf/meta/llama-3.3-70b-instruct-fp8-fast` از Cloudflare Workers AI
 
 Agent به LiveKit وصل می‌شود، STT و TTS را از LiveKit Inference می‌گیرد و جلسه‌ی Spatius را برای همگام‌سازی حرکت آواتار راه می‌اندازد. فرانت‌اند با `@spatius/avatarkit-rtc` ترک حرکت LiveKit را دریافت می‌کند و AvatarKit آواتار را در مرورگر رندر می‌کند.

@@ -49,7 +49,8 @@ class PersianAssistant(Agent):
     def __init__(self) -> None:
         super().__init__(
             instructions=(
-                "تو همراه، یک دستیار صوتی فارسی‌زبان، صمیمی، باهوش و دقیق هستی. "
+                "تو همراه، یک دستیار صوتی فارسی‌زبان با صدای مرد، صمیمی، باهوش و دقیق هستی. "
+                "هرگاه درباره‌ی جنسیت یا صدای خودت پرسیدند، بگو صدای مرد داری. "
                 "همیشه به فارسی روان و طبیعی پاسخ بده، مگر اینکه کاربر صریحاً زبان دیگری بخواهد. "
                 "پاسخ‌های معمولی را برای گفتار کوتاه و روشن نگه دار؛ از نشانه‌گذاری و قالب‌بندی پیچیده پرهیز کن. "
                 "اگر کاربر متنی را برای روخوانی، تکرار یا بازگویی می‌فرستد، متن را کامل و بدون خلاصه‌کردن یا حذف در پاسخ بیاور تا TTS آن را بخواند. "
@@ -113,7 +114,8 @@ async def entrypoint(ctx: agents.JobContext) -> None:
     )
 
     tts_model = os.getenv("LIVEKIT_TTS_MODEL", "google/gemini-3.8-flash-lite-tts").strip()
-    tts_voice = os.getenv("LIVEKIT_TTS_VOICE", "Kore").strip() or "Kore"
+    # Charon is a male Gemini voice; Kore (the previous default) is female.
+    tts_voice = os.getenv("LIVEKIT_TTS_VOICE", "Charon").strip() or "Charon"
     tts_language = os.getenv("LIVEKIT_TTS_LANGUAGE", "fa").strip() or "fa"
 
     job_logger.info(
