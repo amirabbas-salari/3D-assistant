@@ -1,6 +1,4 @@
 livekit-agents~=1.8
 livekit-plugins-spatius~=1.8
 livekit-plugins-openai~=1.8
-edge-tts>=7.0.0
-av>=14.0.0
 python-dotenv>=1.0.0
