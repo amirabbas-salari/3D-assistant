@@ -309,19 +309,36 @@ async def entrypoint(ctx: agents.JobContext) -> None:
     def on_user_input_transcribed(event) -> None:
         asyncio.create_task(publish_user_transcript(event))
 
+    rate_limit_hits = {"count": 0, "hinted": False}
+
     @session.on("error")
     def on_session_error(event) -> None:
         error = event.error
         status = getattr(error, "status_code", None)
         if status == 429:
-            job_logger.error(
-                "LiveKit Inference rejected a request with 429 (source=%s): the "
-                "project hit its concurrent STT/TTS limit. Close extra tabs and "
-                "agent sessions, then retry; see Settings -> Project in the "
-                "LiveKit dashboard for current quotas. %s",
-                event.source,
-                error,
-            )
+            rate_limit_hits["count"] += 1
+            # A burst clears by itself; retries fix it silently. A 429 that is
+            # still arriving after every retry, from the very first turn, is
+            # almost always an exhausted Build-plan allowance (or leftover
+            # sessions holding the 5 STT / 5 TTS connections), and no amount of
+            # waiting in the SDK will change that. Say so once, with the exact
+            # command that reports why, instead of repeating the same line.
+            if not rate_limit_hits["hinted"] and rate_limit_hits["count"] >= 4:
+                rate_limit_hits["hinted"] = True
+                job_logger.error(
+                    "LiveKit Inference is still returning 429 after %d rejections (STT and TTS). "
+                    "That is not a short burst: either the project used up its Build-plan allowance "
+                    "for the month, or old agent sessions are still holding the 5 STT / 5 TTS "
+                    "connections. Run `python scripts/check_inference.py` to see the gateway's own "
+                    "reason (body + quota headers), and check LiveKit Cloud -> Settings -> Project. "
+                    "Last error: %s",
+                    rate_limit_hits["count"], error,
+                )
+            else:
+                job_logger.warning(
+                    "LiveKit Inference 429 on %s (attempt %d, retrying)",
+                    event.source, rate_limit_hits["count"],
+                )
             return
         job_logger.error("AgentSession %s error: %s", event.source, error)
 
