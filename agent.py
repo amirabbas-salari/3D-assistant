@@ -10,7 +10,7 @@ from dotenv import load_dotenv
 from livekit import agents, rtc
 from livekit.agents import Agent, AgentSession, RoomOutputOptions, inference
 from livekit.plugins import openai, spatius
-from gemini_interactions_tts import GeminiInteractionsTTS
+from edge_tts_adapter import EdgeNeuralTTS
 
 load_dotenv()
 
@@ -106,36 +106,29 @@ async def entrypoint(ctx: agents.JobContext) -> None:
         f"https://api.cloudflare.com/client/v4/accounts/{cloudflare_account_id}/ai/v1"
     )
 
-    google_api_key = os.getenv("GOOGLE_API_KEY", "").strip()
-    tts_model = os.getenv("GOOGLE_TTS_MODEL", "gemini-3.8-flash-lite-tts").strip()
-    tts_voice = os.getenv("GOOGLE_TTS_VOICE", "Kore").strip()
-    tts_instructions = os.getenv(
-        "GOOGLE_TTS_INSTRUCTIONS",
-        "Speak naturally in Persian with a warm, friendly, conversational tone. Preserve the exact text.",
-    ).strip()
-    if not google_api_key:
-        raise RuntimeError("GOOGLE_API_KEY is required for Gemini TTS")
+    tts_voice = os.getenv("EDGE_TTS_VOICE", "fa-IR-DilaraNeural").strip()
+    tts_rate = os.getenv("EDGE_TTS_RATE", "+0%").strip()
+    tts_pitch = os.getenv("EDGE_TTS_PITCH", "+0Hz").strip()
 
     job_logger.info(
-        "Voice pipeline models: STT=LiveKit Inference/%s (%s), LLM=Cloudflare Workers AI/%s, TTS=Google Gemini/%s voice=%s",
-        stt_model, stt_language, llm_model, tts_model, tts_voice,
+        "Voice pipeline models: STT=LiveKit Inference/%s (%s), LLM=Cloudflare Workers AI/%s, TTS=Microsoft Edge Neural/%s voice=%s",
+        stt_model, stt_language, llm_model, "edge-tts", tts_voice,
     )
 
     session = AgentSession(
         stt=inference.STT(model=stt_model, language=stt_language),
         llm=openai.LLM(model=llm_model, api_key=cloudflare_api_token, base_url=cloudflare_base_url),
-        tts=GeminiInteractionsTTS(
-            api_key=google_api_key,
-            model=tts_model,
-            voice_name=tts_voice,
-            instructions=tts_instructions,
+        tts=EdgeNeuralTTS(
+            voice=tts_voice,
+            rate=tts_rate,
+            pitch=tts_pitch,
         ),
     )
 
     avatar = None
     spatius_sample_rate = int(os.getenv("SPATIUS_SAMPLE_RATE", "24000"))
     try:
-        # Gemini TTS emits 24 kHz audio; keep Spatius on a supported Ogg Opus rate.
+        # The Edge TTS adapter resamples MP3 output to 24 kHz PCM for Spatius.
         avatar = spatius.AvatarSession(sample_rate=spatius_sample_rate)
         await avatar.start(session, room=ctx.room)
         job_logger.info(

@@ -14,8 +14,7 @@ function isConfigured() {
   return Boolean(
     process.env.LIVEKIT_URL && process.env.LIVEKIT_API_KEY && process.env.LIVEKIT_API_SECRET &&
     process.env.SPATIUS_API_KEY && process.env.SPATIUS_APP_ID && process.env.SPATIUS_AVATAR_ID &&
-    process.env.CLOUDFLARE_ACCOUNT_ID && process.env.CLOUDFLARE_API_TOKEN &&
-    process.env.GOOGLE_API_KEY,
+    process.env.CLOUDFLARE_ACCOUNT_ID && process.env.CLOUDFLARE_API_TOKEN,
   );
 }
 
@@ -33,17 +32,17 @@ app.get('/api/health', (_req, res) => {
     spatiusAvatarId: process.env.SPATIUS_AVATAR_ID || null,
     sttModel: process.env.LIVEKIT_STT_MODEL || 'deepgram/nova-3',
     sttLanguage: process.env.LIVEKIT_STT_LANGUAGE || 'fa',
-    ttsProvider: 'Google Gemini TTS',
-    ttsModel: process.env.GOOGLE_TTS_MODEL || 'gemini-3.8-flash-lite-tts',
-    ttsVoice: process.env.GOOGLE_TTS_VOICE || 'Kore',
-    ttsLanguage: 'auto-detected from text',
-    googleTtsConfigured: Boolean(process.env.GOOGLE_API_KEY),
+    ttsProvider: 'Microsoft Edge TTS',
+    ttsModel: 'edge-tts',
+    ttsVoice: process.env.EDGE_TTS_VOICE || 'fa-IR-DilaraNeural',
+    ttsLanguage: 'fa-IR',
+    edgeTtsConfigured: true,
   });
 });
 
 app.post('/api/session', async (req, res) => {
   if (!isConfigured()) {
-    return res.status(503).json({ error: 'برای شروع، اطلاعات LiveKit، Spatius، Cloudflare Workers AI و Google Gemini TTS (GOOGLE_API_KEY) را در فایل .env تنظیم کنید.' });
+    return res.status(503).json({ error: 'برای شروع، اطلاعات LiveKit، Spatius و Cloudflare Workers AI را در فایل .env تنظیم کنید؛ Microsoft Edge TTS به API key نیاز ندارد.' });
   }
 
   const roomName = `hamrah-${randomUUID().slice(0, 12)}`;
@@ -83,7 +82,7 @@ app.post('/api/session', async (req, res) => {
   } catch (error) {
     console.error('Could not start LiveKit session:', error);
     res.status(502).json({
-      error: 'ساخت جلسه‌ی صوتی/تصویری ناموفق بود. تنظیمات LiveKit، Agent، Spatius و Google Gemini را بررسی کنید.',
+      error: 'ساخت جلسه‌ی صوتی/تصویری ناموفق بود. تنظیمات LiveKit، Agent و Spatius را بررسی کنید.',
       details: process.env.NODE_ENV === 'production' ? undefined : (error instanceof Error ? error.message : String(error)),
     });
   }
