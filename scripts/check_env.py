@@ -28,6 +28,7 @@ from pathlib import Path
 
 ROOT = Path(__file__).resolve().parent.parent
 ENV_PATH = ROOT / ".env"
+UNTERMINATED: list[str] = []
 
 
 def _mask(value: str) -> str:
@@ -40,14 +41,20 @@ def _mask(value: str) -> str:
 
 
 def load_env_file() -> dict[str, str]:
-    """Read .env and report what is there, without trusting python-dotenv first.
+    """Read .env the way the two real readers do, not with a naive split.
 
-    ``lk`` reads ``.env.local`` then ``.env`` with ``godotenv.Read``, which does
-    not expand shell variables and ignores malformed lines. Reading the file by
-    hand here means a malformed line shows up as a warning instead of silently
-    producing an empty value in the agent.
+    ``agent.py`` uses ``python-dotenv`` and ``lk`` uses ``godotenv``. Both accept
+    a trailing comment after a quoted value (``KEY="value" # note``): the quote
+    closes the value and everything after it is discarded. Both also accept a
+    comment after an *unquoted* value when the ``#`` follows whitespace.
+
+    An earlier version of this function only stripped matching outer quotes, so
+    ``"wss://host" # a2`` became ``"wss://host" # a2`` verbatim and this script
+    reported a perfectly good .env as malformed. Parsing like the real readers
+    is the whole point of checking them.
     """
     values: dict[str, str] = {}
+    UNTERMINATED.clear()
     if not ENV_PATH.exists():
         return values
     for raw in ENV_PATH.read_text(encoding="utf-8", errors="replace").splitlines():
@@ -59,12 +66,38 @@ def load_env_file() -> dict[str, str]:
         if "=" not in line:
             print(f"  ⚠ خط نامعتبر (بدون =): {raw[:60]}")
             continue
-        key, _, value = line.partition("=")
-        value = value.strip()
-        if len(value) >= 2 and value[0] == value[-1] and value[0] in "\"'":
-            value = value[1:-1]
-        values[key.strip()] = value
+        key, _, rest = line.partition("=")
+        values[key.strip()] = _parse_value(rest.strip())
     return values
+
+
+def _parse_value(src: str) -> str:
+    """Value of one ``KEY=...`` line, following godotenv's rules.
+
+    Quoted: the value ends at the closing quote (respecting backslash escapes),
+    and a trailing comment is dropped. Unquoted: a `` #`` starts a comment.
+    """
+    if src[:1] in {"'", '"'}:
+        quote = src[0]
+        i = 1
+        while i < len(src):
+            if src[i] == quote:
+                backslashes = 0
+                j = i - 1
+                while j >= 0 and src[j] == "\\":
+                    backslashes += 1
+                    j -= 1
+                if backslashes % 2 == 0:
+                    return src[1:i]
+            i += 1
+        # Unterminated quote: godotenv fails the whole file and python-dotenv
+        # returns nothing useful, so this is a hard error, not a warning.
+        UNTERMINATED.append(src[:40])
+        return ""
+    for index, char in enumerate(src):
+        if char == "#" and index > 0 and src[index - 1] in " \t":
+            return src[:index].strip()
+    return src.strip()
 
 
 def check_files() -> list[str]:
@@ -83,9 +116,13 @@ def check_files() -> list[str]:
         local = {}
         for raw in env_local.read_text(encoding="utf-8", errors="replace").splitlines():
             line = raw.strip()
-            if line and not line.startswith("#") and "=" in line:
+            if not line or line.startswith("#"):
+                continue
+            if line.startswith("export "):
+                line = line[len("export "):]
+            if "=" in line:
                 k, _, v = line.partition("=")
-                local[k.strip()] = v.strip().strip("\"'")
+                local[k.strip()] = _parse_value(v.strip())
         file_values = load_env_file()
         both = sorted(set(local) & set(file_values))
         if both:
@@ -97,6 +134,9 @@ def check_files() -> list[str]:
 def check_values(values: dict[str, str]) -> list[str]:
     problems: list[str] = []
     print("\n۲) کلیدهای LiveKit در .env")
+    for snippet in UNTERMINATED:
+        print(f"  ❌ کوتیشن بسته نشده در خطی که با این شروع می‌شود: {snippet}")
+        problems.append("کوتیشن بسته‌نشده در .env")
     required = ("LIVEKIT_URL", "LIVEKIT_API_KEY", "LIVEKIT_API_SECRET")
     missing = [k for k in required if not values.get(k, "").strip()]
     for key in required:
@@ -115,11 +155,13 @@ def check_values(values: dict[str, str]) -> list[str]:
         return problems
 
     url = values["LIVEKIT_URL"].strip()
-    if url.startswith("ws://") or url.startswith("wss://"):
-        print(f"  ⚠ LIVEKIT_URL با {url.split(':', 1)[0]} شروع می‌شود؛ ایجنت wss را می‌پذیرد ولی")
-        print("    lk برای بررسی کلید به https نیاز دارد. مقدار متداول: wss://<project>.livekit.cloud")
-    elif not url.startswith("https://"):
-        print(f"  ⚠ LIVEKIT_URL باید با https:// یا wss:// شروع شود، نه {url[:24]!r}")
+    # wss:// is the normal LiveKit Cloud value and both readers accept it; the
+    # SDK rewrites it to https:// for the REST API. Only a wrong scheme is a bug.
+    if not url.startswith(("wss://", "ws://", "https://", "http://")):
+        print(f"  ⚠ LIVEKIT_URL باید با wss:// یا https:// شروع شود، نه {url[:24]!r}")
+        problems.append("LIVEKIT_URL با طرح نادرست")
+    elif url.startswith("ws://") and "localhost" not in url and "127.0.0.1" not in url:
+        print("  ⚠ برای سرور راه دور از wss:// استفاده کنید (ws:// رمزنگاری‌نشده است)")
 
     key, secret = values["LIVEKIT_API_KEY"].strip(), values["LIVEKIT_API_SECRET"].strip()
     if secret.startswith("API") and key.startswith("API"):

@@ -111,6 +111,23 @@ WARNING: in-process auto-reload has been removed from the Python CLI; use `lk ag
 
 پس تا وقتی این پروژه هم `package.json` دارد، `python agent.py dev` ساده‌ترین گزینه است؛ اگر hot-reload می‌خواهید، جابه‌جایی موقت `package.json` لازم است.
 
+### کامنت انتهای خط در `.env`
+
+این خط کاملاً درست است و هر دو خواننده (python-dotenv در ایجنت و godotenv در `lk`) هم درست می‌خوانندش:
+
+```env
+LIVEKIT_URL="wss://horno-avatar-as3z5jer.livekit.cloud" # a2
+```
+
+قاعده این است:
+
+- **مقدار داخل کوتیشن**: با کوتیشن بسته می‌شود و هر چیزی بعد از آن (مثل `# a2`) دور ریخته می‌شود.
+- **مقدار بدون کوتیشن**: یک `#` که قبلش فاصله باشد، شروع کامنت است (`KEY=value123 # note` → `value123`).
+- **`#` داخل کوتیشن** کامنت نیست: `KEY="pa#ssword"` مقدارش `pa#ssword` است.
+- **کوتیشن بسته‌نشده** کل مقدار را خراب می‌کند، نه فقط همان خط.
+
+پس اگر در `.env` خود `# a2` یا توضیح فارسی نوشته‌اید، مشکلی نیست و لازم نیست پاکش کنید.
+
 ### `lk agent dev agent.py` → `api-key is required`
 
 بعد از حل مشکل entrypoint، `lk` جلوی دیگری می‌ایستد. این پیام از `resolveProject` در `cmd/lk/utils.go` می‌آید، یعنی **هیچ‌کدام** از این منابع مقدار نداشته‌اند:
@@ -167,7 +184,7 @@ lk cloud auth
 
 - **`lk` شناخته نمی‌شود:** LiveKit CLI جدا از SDK پایتون نصب می‌شود (`winget install LiveKit.LiveKitCLI`). نصبش اجباری نیست؛ `python agent.py dev` جایگزین کامل است.
 - **`lk` پیام `could not detect project type` داد:** یعنی در آن پوشه نه `package.json` هست نه `requirements.txt`؛ از ریشه‌ی پروژه اجرا کنید.
-- **هر خطای دیگری درباره‌ی اعتبارنامه یا اتصال:** `python scripts/check_env.py` را بزنید؛ وجود `.env`، خالی بودن هر کلید، جابه‌جایی key/secret، تعارض `.env.local`، و پذیرش واقعی کلید توسط LiveKit را جدا گزارش می‌کند.
+- **هر خطای دیگری درباره‌ی اعتبارنامه یا اتصال:** `python scripts/check_env.py` را بزنید؛ وجود `.env`، خالی بودن هر کلید، جابه‌جایی key/secret، تعارض `.env.local`، کوتیشن بسته‌نشده، و پذیرش واقعی کلید توسط LiveKit را جدا گزارش می‌کند. مقادیر را دقیقاً با همان قاعده‌ی python-dotenv و godotenv می‌خواند (کامنت انتهای خط، کوتیشن، `export`).
 - **`ModuleNotFoundError` برای `livekit` یا `latency`:** venv فعال نیست. با `python -c "import sys; print(sys.executable)"` مطمئن شوید از کدام مفسر استفاده می‌شود، بعد `pip install -r requirements.txt` را در همان محیط بزنید.
 - **خطای `SPEECH_PROVIDER=direct requires ...`:** عمدی است؛ در حالت `direct` کلیدها از همان ابتدا بررسی می‌شوند. بخش «کلید مستقیم ارائه‌دهنده» را ببینید.
 - **اجرا شد ولی اتصال برقرار نشد:** `LIVEKIT_URL`, `LIVEKIT_API_KEY` و `LIVEKIT_API_SECRET` را چک کنید؛ ایجنت برای dispatch شدن به پروژه‌ی LiveKit نیاز دارد.
