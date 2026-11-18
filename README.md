@@ -30,6 +30,8 @@ pip install -r requirements.txt
 python agent.py dev
 ```
 
+> **دستور اجرا:** `python agent.py dev` بزنید. اگر LiveKit CLI را نصب کرده‌اید، `lk agent dev` روی این پروژه کار **نمی‌کند** — چون `package.json` در ریشه وجود دارد، `lk` پروژه را Node.js می‌شناسد و حتی با آرگومان `agent.py` هم آن را با `node` اجرا می‌کند. راه‌حل در بخش «خطای `no agent entrypoint found`» آمده است.
+
 در ترمینال دیگر رابط وب و API را اجرا کنید:
 
 ```bash
@@ -42,6 +44,80 @@ Vite (معمولاً `http://localhost:5173`) درخواست‌های `/api` ر�
 npm run build
 NODE_ENV=production npm start
 ```
+
+## خطای `no agent entrypoint found`
+
+```
+PS> lk agent dev
+no agent entrypoint found, checked:
+- main.ts
+- src/main.js
+- src/main.ts
+- src/main.js
+```
+
+این پیام می‌گوید `lk` پروژه را **Node.js** تشخیص داده و فقط دنبال entrypointهای جاوااسکریپت گشته است. مشکل از `.env`، وابستگی‌ها یا کد پایتون نیست.
+
+### علت دقیق
+
+LiveKit CLI (`lk`) برای انتخاب runtime اول نوع پروژه را تشخیص می‌دهد. در `pkg/agentfs/detect.go` این ترتیب است و **اولین تطابق برنده می‌شود**:
+
+```go
+if util.FileExists(dir, "package.json") { return ProjectTypeNode }
+if util.FileExists(dir, "uv.lock")      { return ProjectTypePythonUV }
+if util.FileExists(dir, "requirements.txt") { return ProjectTypePythonPip }
+if util.FileExists(dir, "pyproject.toml")   { return ProjectTypePythonPip }
+```
+
+این پروژه **هر دو** مانیفست را در ریشه دارد: `package.json` (رابط وب و API) و `requirements.txt` (ایجنت پایتون). چون `package.json` اول بررسی می‌شود، نوع پروژه `Node` می‌شود و فهرست entrypointهای جستجو‌شده هم `main.ts` / `src/main.js` می‌شود — همان‌هایی که در پیام خطا می‌بینید. `agent.py` حتی بررسی هم نمی‌شود.
+
+### 🔴 آرگومان `agent.py` کافی نیست
+
+این نکته مهم است و مستندات صریحاً آن را نمی‌گوید: دادن entrypoint دستی مشکل را حل نمی‌کند. با `lk agent dev agent.py`، تابع `findEntrypoint` فایل را پیدا می‌کند (چون بررسی `os.Stat` روی `.py` هم کار می‌کند)، ولی `buildAgentCommand` هنوز بر اساس `ProjectType` تصمیم می‌گیرد:
+
+```go
+if cfg.ProjectType.IsNode() {
+    // node [--experimental-strip-types] ENTRYPOINT ...
+    return nodeBin, args, nil
+}
+```
+
+یعنی فایل پایتون به `node` داده می‌شود و با خطای اجرای Node شکست می‌خورد. **آرگومان، تشخیص نوع پروژه را عوض نمی‌کند.**
+
+### راه‌حل درست
+
+`package.json` را یک لحظه از مسیر تشخیص کنار بگذارید، دستور را اجرا کنید، و بعد برگردانید:
+
+```powershell
+Rename-Item package.json package.json.bak
+lk agent dev agent.py
+Rename-Item package.json.bak package.json
+```
+
+حالا `requirements.txt` پیدا می‌شود، نوع پروژه `PythonPip` می‌شود و CLI با `<python> -m livekit.agents dev agent.py` اجرا می‌کند — همان چیزی که انتظار دارید.
+
+اگر این جابه‌جایی را نمی‌خواهید، `python agent.py dev` دقیقاً همان کار را می‌کند:
+
+```powershell
+python agent.py dev
+```
+
+این روش کاملاً سالم است و مشکل نوع پروژه هم ندارد، ولی SDK پایتون نسخه‌ی ۱.۸.۱۲ آن را منسوخ اعلام می‌کند و hot-reload ندارد:
+
+```
+WARNING: dev mode is deprecated and will be removed in a future release; use `lk agent dev` instead
+WARNING: in-process auto-reload has been removed from the Python CLI; use `lk agent dev` for hot-reload
+```
+
+پس تا وقتی این پروژه هم `package.json` دارد، `python agent.py dev` ساده‌ترین گزینه است؛ اگر hot-reload می‌خواهید، جابه‌جایی موقت `package.json` لازم است.
+
+### اگر باز هم کار نکرد
+
+- **`lk` شناخته نمی‌شود:** LiveKit CLI جدا از SDK پایتون نصب می‌شود (`winget install LiveKit.LiveKitCLI`). نصبش اجباری نیست؛ `python agent.py dev` جایگزین کامل است.
+- **`lk` پیام `could not detect project type` داد:** یعنی در آن پوشه نه `package.json` هست نه `requirements.txt`؛ از ریشه‌ی پروژه اجرا کنید.
+- **`ModuleNotFoundError` برای `livekit` یا `latency`:** venv فعال نیست. با `python -c "import sys; print(sys.executable)"` مطمئن شوید از کدام مفسر استفاده می‌شود، بعد `pip install -r requirements.txt` را در همان محیط بزنید.
+- **خطای `SPEECH_PROVIDER=direct requires ...`:** عمدی است؛ در حالت `direct` کلیدها از همان ابتدا بررسی می‌شوند. بخش «کلید مستقیم ارائه‌دهنده» را ببینید.
+- **اجرا شد ولی اتصال برقرار نشد:** `LIVEKIT_URL`, `LIVEKIT_API_KEY` و `LIVEKIT_API_SECRET` را چک کنید؛ ایجنت برای dispatch شدن به پروژه‌ی LiveKit نیاز دارد.
 
 ## خاموش‌کردن موقت آواتار
 
