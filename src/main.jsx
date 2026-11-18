@@ -43,6 +43,8 @@ function App() {
   const avatarPlayerRef = useRef(null);
   const avatarViewRef = useRef(null);
   const motionWatchRef = useRef([]);
+  // D-ID publishes a normal video track, so it renders into a plain <video>.
+  const avatarVideoRef = useRef(null);
   // Guards against a double click racing the async setPhase('connecting'): two
   // sessions would mean two agents and two STT connections in one room.
   const startingRef = useRef(false);
@@ -193,18 +195,26 @@ function App() {
       // (display:none) <video> element, so LiveKit would conclude nobody is
       // watching and ask the server to pause it — no motion frames, static face.
       // With the avatar off, motion is expected and adaptiveStream is safe.
+      // `/api/session` reports the provider so the renderer is known before
+      // connecting; health is only a fallback for older servers.
+      const provider = ['did', 'spatius', 'none'].includes(data.avatarProvider)
+        ? data.avatarProvider
+        : avatarEnabled ? 'spatius' : 'none';
+      const spatiusAvatar = provider === 'spatius';
       room = new Room({
-        adaptiveStream: !avatarEnabled,
+        adaptiveStream: !spatiusAvatar,
         dynacast: true,
-        singlePeerConnection: !avatarEnabled ? undefined : false,
+        singlePeerConnection: spatiusAvatar ? false : undefined,
       });
       roomRef.current = room;
 
       // Spatius publishes motion data on a LiveKit video track. Attach AvatarKit
       // to this app-owned room before connecting; the track is not an HTML video.
       // Skipped entirely while the avatar is disabled for LLM/TTS/STT work.
-      if (!avatarEnabled) {
+      if (provider === 'none') {
         addLog('info', 'آواتار خاموش است', 'AVATAR_ENABLED=false · فقط صدا و متن فعال است');
+      } else if (provider === 'did') {
+        addLog('info', 'آواتار D-ID فعال است', 'ویدیوی D-ID به‌صورت ترک ویدیویی در همین اتاق منتشر می‌شود');
       } else try {
         if (typeof globalThis.RTCRtpScriptTransform === 'undefined') {
           throw new Error('مرورگر از RTCRtpScriptTransform موردنیاز آواتار Spatius پشتیبانی نمی‌کند');
@@ -298,7 +308,10 @@ function App() {
           // The motion track is the only source of lip-sync. Keep it explicitly
           // flowing: a disabled publication silently freezes the avatar's face.
           publication.setEnabled?.(true);
-          addLog('info', 'ترک حرکت آواتار دریافت شد',
+          if (provider === 'did' && avatarVideoRef.current) {
+            track.attach(avatarVideoRef.current);
+          }
+          addLog('info', 'ترک ویدیویی آواتار دریافت شد',
             `${participant.identity} · ${publication.source} · name=${publication.trackName || 'n/a'} · enabled=${publication.isEnabled}`);
         } else if (track.kind === Track.Kind.Audio) {
           setAssistantAudioTracks((current) => current.includes(track) ? current : [...current, track]);
@@ -306,7 +319,10 @@ function App() {
         }
       });
       room.on(RoomEvent.TrackUnsubscribed, (track, _publication, participant) => {
-        if (track.kind === Track.Kind.Video) setAvatarReady(false);
+        if (track.kind === Track.Kind.Video) {
+          if (provider === 'did' && avatarVideoRef.current) track.detach(avatarVideoRef.current);
+          setAvatarReady(false);
+        }
         if (track.kind === Track.Kind.Audio) setAssistantAudioTracks((current) => current.filter((item) => item !== track));
         addLog('warning', 'ترک از اتاق لغو شد', `${participant.identity} · ${track.kind}`);
       });
@@ -462,6 +478,8 @@ function App() {
   // Health is the single source of truth so the agent and the browser never
   // disagree about whether the avatar is on.
   const avatarEnabled = Boolean(health?.avatarEnabled);
+  // "spatius" drives the AvatarKit canvas, "did" is a plain LiveKit video track.
+  const avatarProvider = health?.avatarProvider === 'did' ? 'did' : avatarEnabled ? 'spatius' : 'none';
 
   return (
     <div className="app-shell" dir="rtl">
@@ -508,10 +526,12 @@ function App() {
                 that audio; with it off, the agent publishes its own TTS audio. */}
             <div className="audio-output" aria-hidden="true">{assistantAudioTracks.map((track) => <RemoteAudioOutput key={track.sid} track={track}/>)}</div>
             {avatarEnabled ? <section className="panel video-panel">
-              <div className="panel-heading"><div><Video size={17}/><div><h2>تصویر آواتار</h2><small>{avatarReady ? 'داده‌ی حرکت آواتار دریافت شد' : connected ? 'در انتظار داده‌ی حرکت Spatius' : 'پس از اتصال نمایش داده می‌شود'}</small></div></div><span className={`video-state ${avatarReady ? 'ready' : ''}`}>{avatarReady ? 'آماده' : 'انتظار'}</span></div>
+              <div className="panel-heading"><div><Video size={17}/><div><h2>تصویر آواتار</h2><small>{avatarReady ? (avatarProvider === 'did' ? 'ترک ویدیوی D-ID دریافت شد' : 'داده‌ی حرکت آواتار دریافت شد') : connected ? (avatarProvider === 'did' ? 'در انتظار ویدیوی D-ID' : 'در انتظار داده‌ی حرکت Spatius') : 'پس از اتصال نمایش داده می‌شود'}</small></div></div><span className={`video-state ${avatarReady ? 'ready' : ''}`}>{avatarReady ? 'آماده' : 'انتظار'}</span></div>
               <div className="video-stage">
-                <div ref={avatarContainerRef} className={`spatius-avatar ${avatarReady ? 'avatar-visible' : ''}`} />
-                {!avatarReady && <div className="video-placeholder"><Video size={22}/><span>{connected ? 'در انتظار آواتار Spatius…' : 'نشستی فعال نیست'}</span></div>}
+                {/* D-ID publishes a real video track; Spatius renders into a canvas. */}
+                <video ref={avatarVideoRef} className={`avatar-video ${avatarReady && avatarProvider === 'did' ? 'video-visible' : ''}`} autoPlay playsInline />
+                <div ref={avatarContainerRef} className={`spatius-avatar ${avatarReady && avatarProvider === 'spatius' ? 'avatar-visible' : ''}`} />
+                {!avatarReady && <div className="video-placeholder"><Video size={22}/><span>{connected ? (avatarProvider === 'did' ? 'در انتظار آواتار D-ID…' : 'در انتظار آواتار Spatius…') : 'نشستی فعال نیست'}</span></div>}
                 {audioNeedsGesture && <button className="audio-prompt" onClick={enableAudioPlayback}>برای شنیدن پاسخ، کلیک کنید</button>}
               </div>
               <div className="video-meta"><span><span className={`tiny-dot ${avatarReady ? 'green' : ''}`}/>{avatarReady ? 'آواتار وصل است' : 'آواتار وصل نیست'}</span><span><Volume2 size={14}/> {assistantAudioTracks.length} ترک صوتی</span></div>

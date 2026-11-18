@@ -1,4 +1,4 @@
-"""Persian LiveKit voice agent with a Spatius-rendered avatar and text fallback."""
+"""Persian LiveKit voice agent with a pluggable avatar (D-ID or Spatius) and text fallback."""
 
 import asyncio
 import json
@@ -17,7 +17,7 @@ from livekit.agents import (
     SessionConnectOptions,
     inference,
 )
-from livekit.plugins import openai, spatius
+from livekit.plugins import openai
 
 load_dotenv()
 
@@ -51,6 +51,87 @@ class RoomLogHandler(logging.Handler):
             asyncio.get_running_loop().create_task(self._publish_log(payload))
         except Exception:
             self.handleError(record)
+
+
+def _avatar_provider() -> str:
+    """Which avatar backend to run, or "none" to publish plain audio.
+
+    AVATAR_ENABLED=false always wins so the voice pipeline can be tested alone.
+    AVATAR_PROVIDER picks the backend; an unset value keeps backwards
+    compatibility with the Spatius-only setup that existed before D-ID.
+    """
+    enabled = os.getenv("AVATAR_ENABLED", "false").strip().lower() in {"1", "true", "yes", "on"}
+    if not enabled:
+        return "none"
+    provider = os.getenv("AVATAR_PROVIDER", "spatius").strip().lower()
+    if provider in {"", "none", "off", "false"}:
+        return "none"
+    if provider not in {"did", "d-id", "didid"}:
+        return "spatius"
+    return "did"
+
+
+async def start_avatar(provider: str, session: AgentSession, room: rtc.Room, job_logger):
+    """Start the configured avatar and return it, or None to fall back to plain audio.
+
+    Both providers replace the session's audio tail and publish the avatar's
+    own audio and video tracks, so the caller only needs to keep the returned
+    object alive (or aclose it).
+    """
+    if provider == "did":
+        agent_id = os.getenv("DID_AGENT_ID", "").strip()
+        if not agent_id:
+            job_logger.error("D-ID avatar selected but DID_AGENT_ID is empty; continuing without avatar")
+            return None
+        try:
+            from livekit.plugins import did
+        except ImportError:
+            job_logger.exception(
+                "livekit-plugins-did is not installed; run pip install -r requirements.txt"
+            )
+            return None
+
+        sample_rate = int(os.getenv("DID_AUDIO_SAMPLE_RATE", "24000"))
+        try:
+            avatar = did.AvatarSession(
+                agent_id=agent_id,
+                audio_config=did.AudioConfig(sample_rate=sample_rate),
+            )
+            await avatar.start(session, room)
+        except Exception:
+            job_logger.exception("Could not start the D-ID avatar; continuing without avatar")
+            return None
+        job_logger.info(
+            "D-ID avatar session started (agent=%s, session=%s, sample rate: %s Hz)",
+            agent_id, getattr(avatar, "session_id", None), sample_rate,
+        )
+        return avatar
+
+    if provider == "spatius":
+        try:
+            from livekit.plugins import spatius
+        except ImportError:
+            job_logger.exception(
+                "livekit-plugins-spatius is not installed; run pip install -r requirements.txt"
+            )
+            return None
+
+        sample_rate = int(os.getenv("SPATIUS_SAMPLE_RATE", "24000"))
+        audio_format = os.getenv("SPATIUS_AUDIO_FORMAT", "pcm_s16le").strip().lower()
+        try:
+            # PCM avoids requiring a system libopus DLL on Windows. Ogg Opus is optional.
+            avatar = spatius.AvatarSession(sample_rate=sample_rate, audio_format=audio_format)
+            await avatar.start(session, room)
+        except Exception:
+            job_logger.exception("Could not start the Spatius avatar; continuing without avatar")
+            return None
+        job_logger.info(
+            "Spatius avatar session started (audio sample rate: %s Hz, format: %s)",
+            sample_rate, audio_format,
+        )
+        return avatar
+
+    return None
 
 
 class PersianAssistant(Agent):
@@ -183,31 +264,17 @@ async def entrypoint(ctx: agents.JobContext) -> None:
         conn_options=session_conn_options,
     )
 
-    avatar = None
     # The avatar only drives rendering; STT, LLM, and TTS run in full either way.
     # With it off, the agent's own LiveKit audio output is enabled so you can
-    # focus on the voice pipeline end to end.
-    avatar_enabled = os.getenv("AVATAR_ENABLED", "false").strip().lower() in {"1", "true", "yes", "on"}
-    if not avatar_enabled:
-        job_logger.info("Avatar disabled (AVATAR_ENABLED=false); using direct LiveKit audio output")
-    else:
-        spatius_sample_rate = int(os.getenv("SPATIUS_SAMPLE_RATE", "24000"))
-        spatius_audio_format = os.getenv("SPATIUS_AUDIO_FORMAT", "pcm_s16le").strip().lower()
-        try:
-            # PCM avoids requiring a system libopus DLL on Windows. Ogg Opus is optional.
-            avatar = spatius.AvatarSession(
-                sample_rate=spatius_sample_rate,
-                audio_format=spatius_audio_format,
-            )
-            await avatar.start(session, room=ctx.room)
-            job_logger.info(
-                "Spatius avatar session started (audio sample rate: %s Hz, format: %s)",
-                spatius_sample_rate, spatius_audio_format,
-            )
-        except Exception:
-            # Spatius setup errors should not prevent voice/text fallback from running.
-            job_logger.exception("Could not start Spatius avatar; continuing without avatar")
-            avatar = None
+    # focus on the voice pipeline end to end. Avatar failures are logged and
+    # never block the voice/text fallback.
+    avatar_provider = _avatar_provider()
+    if avatar_provider == "none":
+        job_logger.info(
+            "Avatar disabled (AVATAR_ENABLED=%s, AVATAR_PROVIDER=%s); using direct LiveKit audio output",
+            os.getenv("AVATAR_ENABLED", "false"), os.getenv("AVATAR_PROVIDER", "spatius"),
+        )
+    avatar = await start_avatar(avatar_provider, session, ctx.room, job_logger)
 
     async def publish_user_transcript(event) -> None:
         text = (event.transcript or "").strip()

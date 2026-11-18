@@ -11,10 +11,31 @@ const __dirname = path.dirname(fileURLToPath(import.meta.url));
 app.use(express.json({ limit: '32kb' }));
 
 // Temporary focus mode: the avatar can be switched off while the STT, LLM, and
-// TTS pipeline is being worked on. Spatius credentials are then not required.
+// TTS pipeline is being worked on. Avatar credentials are then not required.
 function avatarEnabled() {
   return ['1', 'true', 'yes', 'on'].includes(
     String(process.env.AVATAR_ENABLED ?? 'false').trim().toLowerCase(),
+  );
+}
+
+// Which avatar backend runs inside the agent. "spatius" stays the default so an
+// existing .env keeps working; "did" uses a D-ID Expressive Agent joined to the
+// same LiveKit room. Must match _avatar_provider() in agent.py.
+function avatarProvider() {
+  if (!avatarEnabled()) return 'none';
+  const provider = String(process.env.AVATAR_PROVIDER ?? 'spatius').trim().toLowerCase();
+  if (['', 'none', 'off', 'false'].includes(provider)) return 'none';
+  if (['did', 'd-id', 'didid'].includes(provider)) return 'did';
+  return 'spatius';
+}
+
+function didConfigured() {
+  return Boolean(process.env.DID_API_KEY && process.env.DID_AGENT_ID);
+}
+
+function spatiusConfigured() {
+  return Boolean(
+    process.env.SPATIUS_API_KEY && process.env.SPATIUS_APP_ID && process.env.SPATIUS_AVATAR_ID,
   );
 }
 
@@ -24,10 +45,10 @@ function isConfigured() {
     process.env.CLOUDFLARE_ACCOUNT_ID && process.env.CLOUDFLARE_API_TOKEN,
   );
   if (!voicePipeline) return false;
-  if (!avatarEnabled()) return true;
-  return Boolean(
-    process.env.SPATIUS_API_KEY && process.env.SPATIUS_APP_ID && process.env.SPATIUS_AVATAR_ID,
-  );
+  const provider = avatarProvider();
+  if (provider === 'none') return true;
+  if (provider === 'did') return didConfigured();
+  return spatiusConfigured();
 }
 
 app.get('/api/health', (_req, res) => {
@@ -40,8 +61,10 @@ app.get('/api/health', (_req, res) => {
     llmMaxTokens: Number(process.env.CLOUDFLARE_LLM_MAX_TOKENS || 8192),
     cloudflareConfigured: Boolean(process.env.CLOUDFLARE_ACCOUNT_ID && process.env.CLOUDFLARE_API_TOKEN),
     avatarEnabled: avatarEnabled(),
-    avatarProvider: 'Spatius',
-    spatiusConfigured: Boolean(process.env.SPATIUS_API_KEY && process.env.SPATIUS_APP_ID && process.env.SPATIUS_AVATAR_ID),
+    avatarProvider: avatarProvider(),
+    didConfigured: didConfigured(),
+    didAgentId: process.env.DID_AGENT_ID || null,
+    spatiusConfigured: spatiusConfigured(),
     spatiusAppId: process.env.SPATIUS_APP_ID || null,
     spatiusAvatarId: process.env.SPATIUS_AVATAR_ID || null,
     sttModel: process.env.LIVEKIT_STT_MODEL || 'deepgram/nova-3',
@@ -56,9 +79,12 @@ app.get('/api/health', (_req, res) => {
 
 app.post('/api/session', async (req, res) => {
   if (!isConfigured()) {
-    const needs = avatarEnabled()
-      ? 'اطلاعات LiveKit، Spatius و Cloudflare Workers AI'
-      : 'اطلاعات LiveKit و Cloudflare Workers AI (آواتار خاموش است و Spatius لازم نیست)';
+    const provider = avatarProvider();
+    const needs = provider === 'did'
+      ? 'اطلاعات LiveKit، D-ID (DID_API_KEY و DID_AGENT_ID) و Cloudflare Workers AI'
+      : provider === 'spatius'
+        ? 'اطلاعات LiveKit، Spatius و Cloudflare Workers AI'
+        : 'اطلاعات LiveKit و Cloudflare Workers AI (آواتار خاموش است و Spatius لازم نیست)';
     return res.status(503).json({ error: `برای شروع، ${needs} را در فایل .env تنظیم کنید؛ TTS از LiveKit Inference استفاده می‌کند و کلید جداگانه‌ی ارائه‌دهنده لازم ندارد.` });
   }
 
@@ -92,6 +118,8 @@ app.post('/api/session', async (req, res) => {
       serverUrl: process.env.LIVEKIT_URL,
       token: await accessToken.toJwt(),
       roomName,
+      // The browser needs to know which renderer to prepare before connecting.
+      avatarProvider: avatarProvider(),
       // These identifiers are public SDK configuration; SPATIUS_API_KEY stays server-side.
       spatiusAppId: process.env.SPATIUS_APP_ID,
       spatiusAvatarId: process.env.SPATIUS_AVATAR_ID,

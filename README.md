@@ -1,16 +1,16 @@
 # همراه — دستیار صوتی و تصویری فارسی
 
-دستیار مکالمه‌ای زنده با رابط فارسی راست‌چین، LLM از Cloudflare Workers AI، STT و TTS از LiveKit Inference، و آواتار زنده‌ی Spatius که در مرورگر با AvatarKit رندر می‌شود. TTS پیش‌فرض `google/gemini-3.8-flash-lite-tts` با صدای مرد `Charon` و زبان `fa` است.
+دستیار مکالمه‌ای زنده با رابط فارسی راست‌چین، LLM از Cloudflare Workers AI، STT و TTS از LiveKit Inference، و آواتار زنده با دو پشتیبان: **D-ID** (ویدیوی لیپ‌سینک‌شده در همان اتاق LiveKit) و **Spatius** (رندر در مرورگر با AvatarKit). TTS پیش‌فرض `google/gemini-3.8-flash-lite-tts` با صدای مرد `Charon` و زبان `fa` است.
 
 برای LiveKit Inference نیازی به کلید API جداگانه‌ی ارائه‌دهنده‌ی TTS نیست؛ احراز هویت با اطلاعات LiveKit انجام می‌شود و مصرف از طریق LiveKit مدیریت می‌شود. مرورگر فقط شناسه‌های عمومی Spatius (App ID و Avatar ID) و یک توکن کوتاه‌عمر LiveKit محدود به همان room دریافت می‌کند.
 
-> **حالت فعلی: آواتار خاموش است.** `AVATAR_ENABLED=false` آواتار Spatius را کامل غیرفعال می‌کند تا روی STT، LLM و TTS تمرکز شود. در این حالت Agent خودش صدای TTS را در room منتشر می‌کند و مرورگر فقط صدا و متن را نشان می‌دهد. برای برگرداندن آواتار، همان متغیر را `true` کنید.
+> **حالت فعلی: آواتار خاموش است.** `AVATAR_ENABLED=false` آواتار را کامل غیرفعال می‌کند تا روی STT، LLM و TTS تمرکز شود. در این حالت Agent خودش صدای TTS را در room منتشر می‌کند و مرورگر فقط صدا و متن را نشان می‌دهد. برای برگرداندن آواتار، همان متغیر را `true` کنید و با `AVATAR_PROVIDER` پشتیبان دلخواه (`did` یا `spatius`) را انتخاب کنید.
 
 ## پیش‌نیازها
 
 - Node.js 18+
 - Python 3.10+
-- حساب Spatius با App ID، API key و Avatar ID
+- یا حساب D-ID با API key و یک Expressive Agent (`DID_AGENT_ID`)، یا حساب Spatius با App ID، API key و Avatar ID
 - پروژه‌ی LiveKit Cloud با Inference فعال و دسترسی به مدل‌های STT/TTS
 - حساب Cloudflare با دسترسی Workers AI و API Token مجاز برای اجرای مدل‌ها
 
@@ -59,7 +59,32 @@ AVATAR_ENABLED=false
 
 مزیت این حالت برای آزمایش: صدای TTS مستقیم از LiveKit پخش می‌شود و Spatius در مسیر نیست، پس هر مشکل صدا یا متن فقط می‌تواند از STT، LLM یا TTS باشد.
 
-برای روشن‌کردن دوباره‌ی آواتار: `AVATAR_ENABLED=true` بگذارید و مطمئن شوید هر سه مقدار Spatius در `.env` پر هستند.
+برای روشن‌کردن دوباره‌ی آواتار: `AVATAR_ENABLED=true` بگذارید و با `AVATAR_PROVIDER` انتخاب کنید کدام پشتیبان اجرا شود.
+
+## آواتار D-ID (پیشنهادی)
+
+D-ID آواتار را به‌صورت ویدیوی زنده با لیپ‌سینک در **همان اتاق LiveKit** منتشر می‌کند. یعنی STT، LLM و TTS همان مسیر قبلی می‌مانند و فقط خروجی صدا به D-ID داده می‌شود؛ همان الگویی که پلاگین رسمی `livekit-plugins-did` پیاده می‌کند.
+
+```env
+AVATAR_ENABLED=true
+AVATAR_PROVIDER=did
+DID_API_KEY=your_did_api_key
+DID_AGENT_ID=agt_your_agent_id
+DID_AUDIO_SAMPLE_RATE=24000
+```
+
+### ساختن Agent در D-ID
+
+1. کلید API را از D-ID Studio (Account Settings) بردارید و در `DID_API_KEY` بگذارید. این کلید فقط روی سرور و Agent می‌ماند.
+2. یک **Expressive Agent** بسازید؛ در API یعنی `POST https://api.d-id.com/agents` با `presenter.type = "expressive"` و یک `presenter_id` (مثلاً `public_mia_elegant@avt_TJ0Tq5`) یا آواتار اختصاصی خودتان از V3 Instant Avatar. `id` برگشتی (`agt_...`) همان `DID_AGENT_ID` است. همین کار از رابط D-ID Studio هم انجام می‌شود.
+3. `AVATAR_PROVIDER=did` را ست کنید و Agent را ری‌استارت کنید. در لاگ Agent خط `D-ID avatar session started` و در پنل «اطلاعات اجرا» مقدار `avatarProvider: did` دیده می‌شود.
+
+نکته‌های مهم:
+
+- D-ID فقط با **Expressive Agent** روی این مسیر کار می‌کند. ویدیوی V3 Instant Avatar که با `POST /scenes` ساخته می‌شود یک فایل از پیش تولیدشده است، نه آواتار زنده، و برای گفتگوی زنده مناسب نیست.
+- D-ID نرخ‌های ۱۶۰۰۰، ۲۴۰۰۰ و ۴۸۰۰۰ هرتز را می‌پذیرد؛ مقدار دیگر خودش resample می‌شود. اگر TTS شما نرخ دیگری دارد، `DID_AUDIO_SAMPLE_RATE` را برابر همان بگذارید تا تبدیل دوگانه نشود.
+- مرورگر برای D-ID به `<video>` معمولی وصل می‌شود (کلاس `avatar-video`)، پس `adaptiveStream` فقط برای Spatius خاموش می‌ماند و برای D-ID روشن است.
+- اگر شروع آواتار شکست بخورد، Agent فقط لاگ خطا می‌دهد و با صدای مستقیم LiveKit ادامه می‌دهد؛ گفتگو قطع نمی‌شود.
 
 ## خطای ۴۲۹ در STT و TTS (سقف اتصال LiveKit Inference)
 
@@ -74,6 +99,8 @@ AVATAR_ENABLED=false
 اگر ۴۲۹ بعد از خالی‌شدن نشست‌ها هم ادامه داشت، سهمیه‌ی پروژه تمام شده است؛ در داشبورد LiveKit بخش Settings → Project را ببینید یا مدل STT/TTS را به ارائه‌دهنده‌ی دیگری با کلید مستقیم تغییر دهید.
 
 ## تنظیم Spatius و LiveKit Inference TTS
+
+این بخش فقط زمانی لازم است که `AVATAR_PROVIDER=spatius` باشد.
 
 1. در LiveKit Cloud یک project بسازید و `LIVEKIT_URL`, `LIVEKIT_API_KEY`, `LIVEKIT_API_SECRET` را در `.env` قرار دهید. LiveKit Inference برای TTS از همین اطلاعات استفاده می‌کند و به Google API key جداگانه نیاز ندارد.
 2. در Spatius Studio یک App بسازید و `SPATIUS_API_KEY`, `SPATIUS_APP_ID` و `SPATIUS_AVATAR_ID` را تنظیم کنید. API key فقط در سرور و Agent می‌ماند. ناحیه به‌صورت خودکار انتخاب می‌شود؛ در صورت نیاز `SPATIUS_REGION` را تنظیم کنید. قالب صدای ورودی پیش‌فرض `pcm_s16le` است تا به DLL بومی Opus وابسته نباشد. اگر `ogg_opus` را انتخاب کردید، نرخ‌های مجاز `8000`, `12000`, `16000`, `24000` و `48000` هرتز هستند و سیستم باید libopus داشته باشد.
@@ -112,8 +139,8 @@ Agent به LiveKit وصل می‌شود، STT و TTS را از LiveKit Inference
 
 ## API
 
-- `GET /api/health` — وضعیت پیکربندی، بدون افشای رازها
-- `POST /api/session` — ساخت LiveKit room، dispatch کردن Agent و برگرداندن JWT کوتاه‌عمر برای همان room به‌همراه شناسه‌های عمومی Spatius
+- `GET /api/health` — وضعیت پیکربندی، بدون افشای رازها؛ شامل `avatarEnabled`, `avatarProvider`, `didConfigured` و `spatiusConfigured`
+- `POST /api/session` — ساخت LiveKit room، dispatch کردن Agent و برگرداندن JWT کوتاه‌عمر برای همان room به‌همراه `avatarProvider` و شناسه‌های عمومی Spatius
 - `POST /api/sessions/cleanup` — بستن roomهای رهاشده با پیشوند `hamrah-` تا اتصال‌های STT/TTS آزاد شوند
 
 `agent.py` از LiveKit Inference برای STT و TTS، Cloudflare Workers AI برای LLM و پلاگین رسمی `livekit-plugins-spatius` برای آواتار استفاده می‌کند. متن تشخیص‌داده‌شده و پاسخ Agent به‌صورت data packet به رابط فرستاده می‌شوند.
