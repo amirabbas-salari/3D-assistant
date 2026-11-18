@@ -85,6 +85,7 @@ DID_AUDIO_SAMPLE_RATE=24000
 - D-ID نرخ‌های ۱۶۰۰۰، ۲۴۰۰۰ و ۴۸۰۰۰ هرتز را می‌پذیرد؛ مقدار دیگر خودش resample می‌شود. اگر TTS شما نرخ دیگری دارد، `DID_AUDIO_SAMPLE_RATE` را برابر همان بگذارید تا تبدیل دوگانه نشود.
 - مرورگر برای D-ID به `<video>` معمولی وصل می‌شود (کلاس `avatar-video`)، پس `adaptiveStream` فقط برای Spatius خاموش می‌ماند و برای D-ID روشن است.
 - اگر شروع آواتار شکست بخورد، Agent فقط لاگ خطا می‌دهد و با صدای مستقیم LiveKit ادامه می‌دهد؛ گفتگو قطع نمی‌شود.
+- **پلاگین آواتار باید در بالای `agent.py` import شود، نه داخل `entrypoint`.** هر پلاگین LiveKit هنگام import خودش را ثبت می‌کند و `Plugin.register_plugin()` فقط روی main thread اجازه دارد. روی ویندوز LiveKit پیش‌فرض jobها را در thread اجرا می‌کند (`JobExecutorType.THREAD`)، پس import تنبل داخل job با `RuntimeError: Plugins must be registered on the main thread` کل job را می‌کشد. به همین دلیل `livekit.plugins.did` و `livekit.plugins.spatius` در سطح ماژول و داخل `try/except ImportError` import می‌شوند؛ نبودن پکیج فقط هنگام درخواست آواتار به‌صورت پیام خطا در لاگ دیده می‌شود.
 
 ## خطای ۴۲۹ در STT و TTS (سقف اتصال LiveKit Inference)
 

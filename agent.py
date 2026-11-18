@@ -19,6 +19,28 @@ from livekit.agents import (
 )
 from livekit.plugins import openai
 
+# Avatar plugins MUST be imported here, not inside the job: every plugin registers
+# itself on import and Plugin.register_plugin() insists on the main thread. On
+# Windows LiveKit runs jobs in threads (JobExecutorType.THREAD), so a lazy import
+# inside entrypoint raises "Plugins must be registered on the main thread" and
+# kills the job. Importing at module level keeps registration on the main thread
+# on every platform; a missing package is reported when an avatar is requested.
+try:
+    from livekit.plugins import did as did_plugin
+
+    _did_import_error = None
+except ImportError as exc:  # pragma: no cover - depends on the installed extras
+    did_plugin = None
+    _did_import_error = exc
+
+try:
+    from livekit.plugins import spatius as spatius_plugin
+
+    _spatius_import_error = None
+except ImportError as exc:  # pragma: no cover - depends on the installed extras
+    spatius_plugin = None
+    _spatius_import_error = exc
+
 load_dotenv()
 
 server = agents.AgentServer()
@@ -83,19 +105,19 @@ async def start_avatar(provider: str, session: AgentSession, room: rtc.Room, job
         if not agent_id:
             job_logger.error("D-ID avatar selected but DID_AGENT_ID is empty; continuing without avatar")
             return None
-        try:
-            from livekit.plugins import did
-        except ImportError:
-            job_logger.exception(
-                "livekit-plugins-did is not installed; run pip install -r requirements.txt"
+        if did_plugin is None:
+            job_logger.error(
+                "livekit-plugins-did could not be imported (%s); "
+                "run pip install -r requirements.txt",
+                _did_import_error,
             )
             return None
 
         sample_rate = int(os.getenv("DID_AUDIO_SAMPLE_RATE", "24000"))
         try:
-            avatar = did.AvatarSession(
+            avatar = did_plugin.AvatarSession(
                 agent_id=agent_id,
-                audio_config=did.AudioConfig(sample_rate=sample_rate),
+                audio_config=did_plugin.AudioConfig(sample_rate=sample_rate),
             )
             await avatar.start(session, room)
         except Exception:
@@ -108,11 +130,11 @@ async def start_avatar(provider: str, session: AgentSession, room: rtc.Room, job
         return avatar
 
     if provider == "spatius":
-        try:
-            from livekit.plugins import spatius
-        except ImportError:
-            job_logger.exception(
-                "livekit-plugins-spatius is not installed; run pip install -r requirements.txt"
+        if spatius_plugin is None:
+            job_logger.error(
+                "livekit-plugins-spatius could not be imported (%s); "
+                "run pip install -r requirements.txt",
+                _spatius_import_error,
             )
             return None
 
@@ -120,7 +142,7 @@ async def start_avatar(provider: str, session: AgentSession, room: rtc.Room, job
         audio_format = os.getenv("SPATIUS_AUDIO_FORMAT", "pcm_s16le").strip().lower()
         try:
             # PCM avoids requiring a system libopus DLL on Windows. Ogg Opus is optional.
-            avatar = spatius.AvatarSession(sample_rate=sample_rate, audio_format=audio_format)
+            avatar = spatius_plugin.AvatarSession(sample_rate=sample_rate, audio_format=audio_format)
             await avatar.start(session, room)
         except Exception:
             job_logger.exception("Could not start the Spatius avatar; continuing without avatar")
