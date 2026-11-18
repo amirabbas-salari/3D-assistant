@@ -10,7 +10,6 @@ from dotenv import load_dotenv
 from livekit import agents, rtc
 from livekit.agents import Agent, AgentSession, RoomOutputOptions, inference
 from livekit.plugins import openai, spatius
-from edge_tts_adapter import EdgeNeuralTTS
 
 load_dotenv()
 
@@ -106,29 +105,29 @@ async def entrypoint(ctx: agents.JobContext) -> None:
         f"https://api.cloudflare.com/client/v4/accounts/{cloudflare_account_id}/ai/v1"
     )
 
-    tts_voice = os.getenv("EDGE_TTS_VOICE", "fa-IR-DilaraNeural").strip()
-    tts_rate = os.getenv("EDGE_TTS_RATE", "+0%").strip()
-    tts_pitch = os.getenv("EDGE_TTS_PITCH", "+0Hz").strip()
+    tts_model = os.getenv("LIVEKIT_TTS_MODEL", "google/gemini-3.8-flash-lite-tts").strip()
+    tts_voice = os.getenv("LIVEKIT_TTS_VOICE", "Kore").strip()
+    tts_language = os.getenv("LIVEKIT_TTS_LANGUAGE", "fa").strip()
 
     job_logger.info(
-        "Voice pipeline models: STT=LiveKit Inference/%s (%s), LLM=Cloudflare Workers AI/%s, TTS=Microsoft Edge Neural/%s voice=%s",
-        stt_model, stt_language, llm_model, "edge-tts", tts_voice,
+        "Voice pipeline models: STT=LiveKit Inference/%s (%s), LLM=Cloudflare Workers AI/%s, TTS=LiveKit Inference/%s voice=%s (%s)",
+        stt_model, stt_language, llm_model, tts_model, tts_voice, tts_language,
     )
 
     session = AgentSession(
         stt=inference.STT(model=stt_model, language=stt_language),
         llm=openai.LLM(model=llm_model, api_key=cloudflare_api_token, base_url=cloudflare_base_url),
-        tts=EdgeNeuralTTS(
+        tts=inference.TTS(
+            model=tts_model,
             voice=tts_voice,
-            rate=tts_rate,
-            pitch=tts_pitch,
+            language=tts_language,
         ),
     )
 
     avatar = None
     spatius_sample_rate = int(os.getenv("SPATIUS_SAMPLE_RATE", "24000"))
     try:
-        # The Edge TTS adapter resamples MP3 output to 24 kHz PCM for Spatius.
+        # LiveKit Inference TTS defaults to 24 kHz PCM, matching the Spatius output rate.
         avatar = spatius.AvatarSession(sample_rate=spatius_sample_rate)
         await avatar.start(session, room=ctx.room)
         job_logger.info(
