@@ -103,6 +103,42 @@ function App() {
     if (logRef.current) logRef.current.scrollTop = logRef.current.scrollHeight;
   }, [logs]);
 
+  async function probeMotionFrames() {
+    const room = roomRef.current;
+    if (!room) return;
+    const sample = async () => {
+      let received = 0;
+      let decoded = 0;
+      for (const participant of room.remoteParticipants.values()) {
+        for (const publication of participant.videoTrackPublications.values()) {
+          const track = publication.track;
+          if (!track?.getRTCStatsReport) continue;
+          try {
+            const report = await track.getRTCStatsReport();
+            report?.forEach((entry) => {
+              if (entry.type !== 'inbound-rtp') return;
+              received += entry.framesReceived || 0;
+              decoded += entry.framesDecoded || 0;
+            });
+          } catch { /* stats are best-effort diagnostics */ }
+        }
+      }
+      return { received, decoded };
+    };
+    const before = await sample();
+    window.setTimeout(async () => {
+      const after = await sample();
+      const received = after.received - before.received;
+      const decoded = after.decoded - before.decoded;
+      if (received > 0) {
+        addLog('success', 'فریم‌های حرکت آواتار در حال دریافت است', `در یک ثانیه: ${received} فریم · decoded ${decoded}`);
+      } else {
+        addLog('error', 'هیچ فریم حرکتی در طول صحبت دریافت نشد',
+          'ترک حرکت Spatius متوقف یا پخش‌نشده است؛ لب‌ها تکان نمی‌خورند. adaptiveStream و وضعیت publication را بررسی کنید.');
+      }
+    }, 1000);
+  }
+
   async function startSession() {
     if (phase !== 'idle') return;
     setPhase('connecting');
@@ -121,7 +157,13 @@ function App() {
       }
 
       const { Room, RoomEvent, Track } = await import('livekit-client');
-      room = new Room({ adaptiveStream: true, dynacast: true, singlePeerConnection: false });
+      // adaptiveStream MUST stay off. Spatius publishes motion data on a video
+      // track and attaches it to a hidden (display:none) <video> element; with
+      // adaptiveStream on, LiveKit sees "nobody is watching" and tells the
+      // server to pause that track, so no motion frames arrive and the avatar
+      // stops moving its lips (audio keeps playing). dynacast only affects
+      // publishing, so it stays enabled.
+      room = new Room({ adaptiveStream: false, dynacast: true, singlePeerConnection: false });
       roomRef.current = room;
 
       // Spatius publishes motion data on a LiveKit video track. Attach AvatarKit
@@ -149,6 +191,26 @@ function App() {
         });
         const player = new avatarRtc.AvatarPlayer(new avatarRtc.LiveKitProvider(), avatarView);
         player.on('error', (error) => addLog('error', 'خطای SDK آواتار Spatius', errorMessage(error)));
+        // Motion (lip-sync) state comes from Spatius over the RTC adapter, not
+        // from AvatarKit's own callback, which never fires in RTC mode.
+        player.on('conversation-state-changed', (state) => {
+          if (state === 'speaking') {
+            addLog('info', 'آواتار شروع به صحبت کرد', 'حالت حرکتی Spatius: speaking');
+            // Measure the motion track while it should be moving. Zero new
+            // frames means the track is paused or not arriving; frames arriving
+            // but a static face means a renderer problem instead.
+            void probeMotionFrames();
+            return;
+          }
+          const summary = avatarPlayerRef.current?.sessionSummary;
+          const frames = summary ? `فریم حرکت: ${summary.totalFrames} · fps≈${summary.avgFps}` : '';
+          addLog(summary && summary.totalFrames > 0 ? 'success' : 'warning', 'آواتار به حالت آماده بازگشت', frames);
+        });
+        player.on('stalled', () => {
+          // In the host-owned path the Room belongs to this app, so reconnecting
+          // is our job; player.reconnect() only works for managed connections.
+          addLog('warning', 'جریان حرکت آواتار متوقف شد', 'بررسی اتصال Room و ترک حرکت Spatius لازم است');
+        });
         avatarPlayerRef.current = player;
         await player.attach(room);
         addLog('success', 'SDK آواتار Spatius آماده شد');
@@ -190,7 +252,11 @@ function App() {
       room.on(RoomEvent.TrackSubscribed, (track, publication, participant) => {
         if (track.kind === Track.Kind.Video) {
           setAvatarReady(true);
-          addLog('info', 'ترک حرکت آواتار دریافت شد', `${participant.identity} · ${publication.source}`);
+          // The motion track is the only source of lip-sync. Keep it explicitly
+          // flowing: a disabled publication silently freezes the avatar's face.
+          publication.setEnabled?.(true);
+          addLog('info', 'ترک حرکت آواتار دریافت شد',
+            `${participant.identity} · ${publication.source} · name=${publication.trackName || 'n/a'} · enabled=${publication.isEnabled}`);
         } else if (track.kind === Track.Kind.Audio) {
           setAssistantAudioTracks((current) => current.includes(track) ? current : [...current, track]);
           addLog('info', 'ترک صوتی دریافت شد', `${participant.identity} · ${publication.source}`);
@@ -233,7 +299,12 @@ function App() {
 
       for (const participant of room.remoteParticipants.values()) {
         for (const publication of participant.videoTrackPublications.values()) {
-          if (publication.track) setAvatarReady(true);
+          if (publication.track) {
+            setAvatarReady(true);
+            // Publications already subscribed before these handlers were
+            // registered never hit TrackSubscribed, so enable them here too.
+            publication.setEnabled?.(true);
+          }
         }
         for (const publication of participant.audioTrackPublications.values()) {
           if (publication.track) setAssistantAudioTracks((current) => current.includes(publication.track) ? current : [...current, publication.track]);
