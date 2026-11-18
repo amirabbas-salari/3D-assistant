@@ -29,6 +29,22 @@ function avatarProvider() {
   return 'spatius';
 }
 
+// Where STT and TTS come from. "inference" uses the LiveKit gateway (included
+// with LiveKit Cloud, capped by the Build-plan monthly allowance); "direct" uses the
+// providers' own API keys and is not subject to that cap.
+function speechProvider() {
+  const provider = String(process.env.SPEECH_PROVIDER ?? 'inference').trim().toLowerCase();
+  return ['direct', 'byok', 'provider', 'own-keys'].includes(provider) ? 'direct' : 'inference';
+}
+
+function speechConfigured() {
+  if (speechProvider() === 'direct') {
+    return Boolean(process.env.DEEPGRAM_API_KEY && process.env.GOOGLE_API_KEY);
+  }
+  // LiveKit Inference authenticates with the project credentials.
+  return Boolean(process.env.LIVEKIT_URL && process.env.LIVEKIT_API_KEY && process.env.LIVEKIT_API_SECRET);
+}
+
 function didConfigured() {
   return Boolean(process.env.DID_API_KEY && process.env.DID_AGENT_ID);
 }
@@ -42,7 +58,7 @@ function spatiusConfigured() {
 function isConfigured() {
   const voicePipeline = Boolean(
     process.env.LIVEKIT_URL && process.env.LIVEKIT_API_KEY && process.env.LIVEKIT_API_SECRET &&
-    process.env.CLOUDFLARE_ACCOUNT_ID && process.env.CLOUDFLARE_API_TOKEN,
+    process.env.CLOUDFLARE_ACCOUNT_ID && process.env.CLOUDFLARE_API_TOKEN && speechConfigured(),
   );
   if (!voicePipeline) return false;
   const provider = avatarProvider();
@@ -67,9 +83,13 @@ app.get('/api/health', (_req, res) => {
     spatiusConfigured: spatiusConfigured(),
     spatiusAppId: process.env.SPATIUS_APP_ID || null,
     spatiusAvatarId: process.env.SPATIUS_AVATAR_ID || null,
+    speechProvider: speechProvider(),
+    speechConfigured: speechConfigured(),
+    deepgramConfigured: Boolean(process.env.DEEPGRAM_API_KEY),
+    googleTtsConfigured: Boolean(process.env.GOOGLE_API_KEY),
     sttModel: process.env.LIVEKIT_STT_MODEL || 'deepgram/nova-3',
     sttLanguage: process.env.LIVEKIT_STT_LANGUAGE || 'fa',
-    ttsProvider: 'LiveKit Inference',
+    ttsProvider: speechProvider() === 'direct' ? 'Google Gemini API' : 'LiveKit Inference',
     ttsModel: process.env.LIVEKIT_TTS_MODEL || 'google/gemini-3.8-flash-lite-tts',
     ttsVoice: process.env.LIVEKIT_TTS_VOICE || 'Charon',
     ttsLanguage: process.env.LIVEKIT_TTS_LANGUAGE || 'fa',
@@ -80,12 +100,15 @@ app.get('/api/health', (_req, res) => {
 app.post('/api/session', async (req, res) => {
   if (!isConfigured()) {
     const provider = avatarProvider();
-    const needs = provider === 'did'
-      ? 'اطلاعات LiveKit، D-ID (DID_API_KEY و DID_AGENT_ID) و Cloudflare Workers AI'
-      : provider === 'spatius'
-        ? 'اطلاعات LiveKit، Spatius و Cloudflare Workers AI'
-        : 'اطلاعات LiveKit و Cloudflare Workers AI (آواتار خاموش است و Spatius لازم نیست)';
-    return res.status(503).json({ error: `برای شروع، ${needs} را در فایل .env تنظیم کنید؛ TTS از LiveKit Inference استفاده می‌کند و کلید جداگانه‌ی ارائه‌دهنده لازم ندارد.` });
+    const parts = ['اطلاعات LiveKit و Cloudflare Workers AI'];
+    if (provider === 'did') parts.push('D-ID (DID_API_KEY و DID_AGENT_ID)');
+    if (provider === 'spatius') parts.push('Spatius');
+    if (!speechConfigured()) {
+      parts.push('کلیدهای گفتار (DEEPGRAM_API_KEY و GOOGLE_API_KEY برای SPEECH_PROVIDER=direct)');
+    }
+    return res.status(503).json({
+      error: `برای شروع، ${parts.join('، ')} را در فایل .env تنظیم کنید.`,
+    });
   }
 
   const roomName = `hamrah-${randomUUID().slice(0, 12)}`;

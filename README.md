@@ -87,9 +87,9 @@ DID_AUDIO_SAMPLE_RATE=24000
 - اگر شروع آواتار شکست بخورد، Agent فقط لاگ خطا می‌دهد و با صدای مستقیم LiveKit ادامه می‌دهد؛ گفتگو قطع نمی‌شود.
 - **پلاگین آواتار باید در بالای `agent.py` import شود، نه داخل `entrypoint`.** هر پلاگین LiveKit هنگام import خودش را ثبت می‌کند و `Plugin.register_plugin()` فقط روی main thread اجازه دارد. روی ویندوز LiveKit پیش‌فرض jobها را در thread اجرا می‌کند (`JobExecutorType.THREAD`)، پس import تنبل داخل job با `RuntimeError: Plugins must be registered on the main thread` کل job را می‌کشد. به همین دلیل `livekit.plugins.did` و `livekit.plugins.spatius` در سطح ماژول و داخل `try/except ImportError` import می‌شوند؛ نبودن پکیج فقط هنگام درخواست آواتار به‌صورت پیام خطا در لاگ دیده می‌شود.
 
-## خطای ۴۲۹ در STT و TTS (سقف اتصال LiveKit Inference)
+## خطای ۴۲۹ در STT و TTS (سهمیه‌ی LiveKit Inference)
 
-روی پلن Build، LiveKit Inference برای هر پروژه **۵ اتصال هم‌زمان STT** و **۵ اتصال هم‌زمان TTS** مجاز می‌داند. هر Agent در حال اجرا یک اتصال STT و یک اتصال TTS نگه می‌دارد، و هر نشستی که با `POST /api/session` ساخته می‌شود یک Agent جدا دارد. پس چند نشست رهاشده (تب بسته‌شده، ری‌لود صفحه، یا نشستی که با «پایان نشست» تمام نشده) سقف را پر می‌کند و هر اتصال جدید با `429 Too Many Requests` رد می‌شود. سهمیه‌ی پروژه‌های رایگان بین همه‌ی پروژه‌های همان حساب تقسیم می‌شود و در داشبورد LiveKit، بخش **Settings → Project** دیده می‌شود.
+روی پلن Build، LiveKit Inference از دو جا می‌تواند ۴۲۹ بدهد و پیام هر دو یکی است: **سهمیه‌ی ماهانه‌ی اعتبار (credit)** که تمام شده باشد، یا **سقف ۵ اتصال هم‌زمان STT و ۵ اتصال هم‌زمان TTS** برای هر پروژه. حالت اول با هیچ تنظیمی در کد حل نمی‌شود و راه‌حلش فقط بخش «کلید مستقیم ارائه‌دهنده» در ادامه است؛ حالت دوم با بستن نشست‌های رهاشده برطرف می‌شود. هر Agent در حال اجرا یک اتصال STT و یک اتصال TTS نگه می‌دارد، و هر نشستی که با `POST /api/session` ساخته می‌شود یک Agent جدا دارد. پس چند نشست رهاشده (تب بسته‌شده، ری‌لود صفحه، یا نشستی که با «پایان نشست» تمام نشده) سقف را پر می‌کند و هر اتصال جدید با `429 Too Many Requests` رد می‌شود. سهمیه‌ی پروژه‌های رایگان بین همه‌ی پروژه‌های همان حساب تقسیم می‌شود و در داشبورد LiveKit، بخش **Settings → Project** دیده می‌شود.
 
 این نسخه سه کار برای همین حالت انجام می‌دهد:
 
@@ -97,7 +97,7 @@ DID_AUDIO_SAMPLE_RATE=24000
 - **مدل جایگزین STT**: `LIVEKIT_STT_FALLBACK` فهرست جداشده با ویرگول از مدل‌های Inference است که سمت سرور امتحان می‌شوند، مثلاً `assemblyai/universal-streaming`. خالی بماند، هیچ fallback فرستاده نمی‌شود.
 - **بستن نشست‌های رهاشده**: دکمه‌ی «بستن نشست‌های باز قبلی» در پنل «صدا و متن» و اندپوینت `POST /api/sessions/cleanup` همه‌ی roomهای با پیشوند `hamrah-` را پاک می‌کنند و Agentهایشان را هم می‌بندند. اگر ۴۲۹ تکرار شد، اول این دکمه را بزنید، بعد دوباره نشست را شروع کنید. همچنین `startSession` با یک قفل داخلی از دو بار کلیک هم‌زمان جلوگیری می‌کند تا در یک نشست دو Agent ساخته نشود.
 
-اگر ۴۲۹ بعد از خالی‌شدن نشست‌ها هم ادامه داشت، سهمیه‌ی پروژه تمام شده است؛ در داشبورد LiveKit بخش Settings → Project را ببینید یا مدل STT/TTS را به ارائه‌دهنده‌ی دیگری با کلید مستقیم تغییر دهید.
+اگر ۴۲۹ بعد از خالی‌شدن نشست‌ها هم ادامه داشت، سهمیه‌ی ماهانه‌ی پروژه تمام شده است؛ در داشبورد LiveKit بخش Settings → Project را ببینید، پلن را ارتقا دهید، یا با `SPEECH_PROVIDER=direct` از کلید مستقیم ارائه‌دهنده استفاده کنید (بخش بعد).
 
 ### تشخیص قطعی: کدام ۴۲۹ است؟
 
@@ -120,6 +120,45 @@ python scripts/check_inference.py
 
 در خود ایجنت هم اگر ۴۲۹ بعد از چهار تلاش ادامه پیدا کند، یک بار (و فقط یک بار) پیام هشدار کامل با ارجاع به همین اسکریپت در پنل لاگ ثبت می‌شود؛ تلاش‌های قبلی فقط `warning` سطح پایین هستند تا پنل پر از خطای تکراری نشود.
 
+## کلید مستقیم ارائه‌دهنده: عبور از سهمیه‌ی LiveKit Inference
+
+سهمیه‌ی اعتبار LiveKit Inference سقف ماهانه دارد و وقتی تمام شود، **هر** اتصال STT و TTS با `429` و هدر `X-Livekit-Inference-Quota-Category: MaxGatewayCredits` رد می‌شود؛ نه با تنظیم `max_retry`، نه با بستن نشست‌ها، و نه با هیچ کلید ارائه‌دهنده‌ای که به Inference بدهید. LiveKit Inference راه BYOK ندارد. تنها راه، صدا زدن مستقیم API خود Deepgram و Google است:
+
+```bash
+# .env
+SPEECH_PROVIDER=direct
+DEEPGRAM_API_KEY=...   # console.deepgram.com → API Keys
+GOOGLE_API_KEY=...     # aistudio.google.com/apikey (کلید Gemini API، نه service account)
+```
+
+با این دو خط همان دو مدل قبلی استفاده می‌شوند، فقط مسیر اتصال عوض می‌شود:
+
+| بخش | `SPEECH_PROVIDER=inference` (پیش‌فرض) | `SPEECH_PROVIDER=direct` |
+| --- | --- | --- |
+| STT | `deepgram/nova-3` از گیت‌وی LiveKit | `deepgram.Nova3` مستقیم با `DEEPGRAM_API_KEY` |
+| TTS | `google/gemini-3.8-flash-lite-tts` از گیت‌وی LiveKit | `google.beta.GeminiTTS` مستقیم با `GOOGLE_API_KEY` |
+| LLM | Cloudflare Workers AI | بدون تغییر (`CLOUDFLARE_*`) |
+| آواتار | D-ID / Spatius | بدون تغییر (`DID_*` / `SPATIUS_*`) |
+| سهمیه | سقف ماهانه‌ی پلن Build | سهمیه‌ی حساب Deepgram و Google |
+
+نکته‌ها:
+
+- **کلید Deepgram لازم است** و Nova-3 زبان فارسی (`fa`) را پشتیبانی می‌کند، پس کیفیت STT فارسی حفظ می‌شود.
+- **`GOOGLE_API_KEY` کلید Gemini API است**، نه فایل service account. اگر کلید متعلق به پروژه‌ای باشد که Gemini API در آن فعال نیست، خطای ۴۰۳/۴۰۱ در لاگ ایجنت می‌آید؛ در AI Studio فعالش کنید.
+- **زبان TTS دیگر پارامتر نیست.** `GeminiTTS` پارامتر `language` ندارد و زبان را از متن تشخیص می‌دهد؛ پس `LIVEKIT_TTS_LANGUAGE` فقط روی مسیر Inference اثر دارد. صدای مرد `Charon` در هر دو مسیر یکی است.
+- **نام مدل‌ها همان می‌ماند.** کد پیشوند `provider/` را حذف می‌کند (`deepgram/nova-3` → `nova-3`)، پس `LIVEKIT_STT_MODEL` و `LIVEKIT_TTS_MODEL` را لازم نیست عوض کنید.
+- **بدون کلید هم کد سالم است.** تا وقتی `SPEECH_PROVIDER=direct` نگذارید، هیچ‌کدام از دو پکیج لازم نیست و پروژه مثل قبل از Inference استفاده می‌کند.
+- **اگر کلید خالی باشد، خطا صریح و از همان ابتدا است:** `agent.py` هنگام بالا آمدن (import) بررسی می‌کند و با پیام `SPEECH_PROVIDER=direct requires DEEPGRAM_API_KEY, GOOGLE_API_KEY` متوقف می‌شود، پس به‌جای میکروفن مرده در وسط نشست، همان اول می‌فهمید چه کم است.
+- **`python scripts/check_inference.py` در حالت `direct` به‌جای گیت‌وی، فقط وجود دو کلید را بررسی می‌کند** و می‌گوید سهمیه‌ی LiveKit دیگر دخیل نیست.
+
+بعد از تغییر `.env`، وابستگی‌های جدید را نصب و سرور و ایجنت را ری‌استارت کنید:
+
+```powershell
+uv pip install -r requirements.txt
+```
+
+پنل «صدا و متن» در ردیف `STT / TTS` نشان می‌دهد کدام مسیر فعال است، و `/api/health` هم فیلدهای `speechProvider` و `speechConfigured` را برمی‌گرداند. اگر `speechConfigured=false` باشد، `POST /api/session` با ۵۰۳ و پیام مشخص می‌گوید چه کلیدی کم است.
+
 ## تنظیم Spatius و LiveKit Inference TTS
 
 این بخش فقط زمانی لازم است که `AVATAR_PROVIDER=spatius` باشد.
@@ -130,9 +169,9 @@ python scripts/check_inference.py
 4. در Cloudflare مقدار `CLOUDFLARE_ACCOUNT_ID` و توکن دارای مجوز Workers AI را تنظیم کنید. سقف خروجی LLM با `CLOUDFLARE_LLM_MAX_TOKENS` کنترل می‌شود و پیش‌فرض آن `8192` است؛ این مقدار صریحاً برای جلوگیری از سقف پیش‌فرض 256 توکنی Workers AI فرستاده می‌شود. برای روخوانی، Agent باید متن کامل را در پاسخ تولید کند؛ TTS فقط همان پاسخ تولیدشده را می‌خواند.
 5. Agent با نام `hamrah-agent` dispatch می‌شود؛ همین نام را با `LIVEKIT_AGENT_NAME` هماهنگ نگه دارید.
 
-مدل‌های پیش‌فرض:
-- STT: `deepgram/nova-3` با زبان `fa` از LiveKit Inference
-- TTS: `google/gemini-3.8-flash-lite-tts` با صدای مرد `Charon` و زبان `fa` از LiveKit Inference
+مدل‌های پیش‌فرض (با `SPEECH_PROVIDER=inference`؛ با `direct` همان مدل‌ها از API مستقیم ارائه‌دهنده می‌آیند):
+- STT: `deepgram/nova-3` با زبان `fa`
+- TTS: `google/gemini-3.8-flash-lite-tts` با صدای مرد `Charon` و زبان `fa`
 - LLM: `@cf/meta/llama-3.3-70b-instruct-fp8-fast` از Cloudflare Workers AI
 
 Agent به LiveKit وصل می‌شود، STT و TTS را از LiveKit Inference می‌گیرد و جلسه‌ی Spatius را برای همگام‌سازی حرکت آواتار راه می‌اندازد. فرانت‌اند با `@spatius/avatarkit-rtc` ترک حرکت LiveKit را دریافت می‌کند و AvatarKit آواتار را در مرورگر رندر می‌کند.

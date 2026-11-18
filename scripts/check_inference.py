@@ -27,17 +27,28 @@ from pathlib import Path
 import aiohttp
 from dotenv import load_dotenv
 
-# The gateway lives next to the LiveKit project; reuse the SDK's own helpers so
-# this script authenticates exactly like the agent does.
-from livekit.agents.inference._utils import get_default_inference_url, get_inference_headers
-from livekit.api import AccessToken
-
 load_dotenv(Path(__file__).resolve().parent.parent / ".env")
 
 QUOTA_HEADER_PREFIXES = ("x-livekit-inference-", "x-ratelimit-", "retry-after")
 
 
+def _gateway_helpers():
+    """Import the gateway plumbing lazily.
+
+    With ``SPEECH_PROVIDER=direct`` no LiveKit project credentials are needed, so
+    the script must not fail on these imports before it can say so.
+    """
+    from livekit.agents.inference._utils import (
+        get_default_inference_url,
+        get_inference_headers,
+    )
+
+    return get_default_inference_url, get_inference_headers
+
+
 def _token() -> str:
+    from livekit.api import AccessToken
+
     api_key = os.getenv("LIVEKIT_API_KEY", "").strip()
     api_secret = os.getenv("LIVEKIT_API_SECRET", "").strip()
     if not api_key or not api_secret:
@@ -58,11 +69,14 @@ def _token() -> str:
 
 
 def _ws_url() -> str:
+    get_default_inference_url, _ = _gateway_helpers()
     base = get_default_inference_url()
     return base.replace("https://", "wss://", 1).replace("http://", "ws://", 1)
 
 
-async def _probe(session: aiohttp.ClientSession, kind: str, payload: dict, headers: dict) -> dict:
+async def _probe(
+    session: aiohttp.ClientSession, kind: str, payload: dict, headers: dict
+) -> dict:
     """Open one gateway connection and report exactly what came back."""
     url = f"{_ws_url()}/{kind}"
     result: dict = {"kind": kind, "url": url}
@@ -111,6 +125,27 @@ async def main() -> int:
     parser.add_argument("--tts-language", default=os.getenv("LIVEKIT_TTS_LANGUAGE", "fa"))
     args = parser.parse_args()
 
+    provider = (os.getenv("SPEECH_PROVIDER", "inference") or "inference").strip().lower()
+    direct = provider in {"direct", "byok", "provider", "own-keys"}
+    if direct:
+        # The agent is not using the gateway at all: its 429s cannot happen, and
+        # probing the gateway would only be confusing. Check the keys instead.
+        missing = [
+            name
+            for name in ("DEEPGRAM_API_KEY", "GOOGLE_API_KEY")
+            if not (os.getenv(name) or "").strip()
+        ]
+        print("SPEECH_PROVIDER=direct: STT and TTS bypass the LiveKit gateway.")
+        if missing:
+            print(f"❌ missing in .env: {', '.join(missing)}")
+            print("   Add them, or set SPEECH_PROVIDER=inference to go back to the gateway.")
+            return 1
+        print("✅ DEEPGRAM_API_KEY and GOOGLE_API_KEY are present.")
+        print("   LiveKit Inference quota is irrelevant on this path; a 401/403 in the agent")
+        print("   log would mean a key is wrong or its API is not enabled on that account.")
+        return 0
+
+    _, get_inference_headers = _gateway_helpers()
     token = _token()
     headers = {
         **get_inference_headers(),
