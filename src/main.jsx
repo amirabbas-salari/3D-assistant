@@ -22,6 +22,31 @@ function messageTime() {
   return new Date().toLocaleTimeString('fa-IR', { hour: '2-digit', minute: '2-digit', second: '2-digit' });
 }
 
+// Labels match latency.py so the panel and the agent log describe the same stage.
+const LATENCY_STAGES = [
+  ['end_of_turn_delay', 'تشخیص پایان نوبت'],
+  ['transcription_delay', 'متن نهایی STT'],
+  ['llm_node_ttft', 'اولین توکن LLM'],
+  ['tts_node_ttfb', 'اولین بایت صدا'],
+  ['playback_latency', 'شروع پخش'],
+];
+
+function msLabel(value) {
+  if (value === null || value === undefined) return '—';
+  if (value >= 1000) return `${(value / 1000).toFixed(2)}s`;
+  if (value >= 100) return `${Math.round(value)}ms`;
+  return `${value.toFixed(1)}ms`;
+}
+
+function formatLatency(packet) {
+  const stages = (packet.last && packet.last.stages) || {};
+  const parts = LATENCY_STAGES
+    .filter(([key]) => stages[key] !== null && stages[key] !== undefined)
+    .map(([key, label]) => `${label}: ${msLabel(stages[key])}`);
+  const e2e = packet.last ? `سراسری ${msLabel(packet.last.e2e_ms)}` : '';
+  return [e2e, ...parts].filter(Boolean).join(' · ');
+}
+
 function errorMessage(error) {
   return error instanceof Error ? error.message : String(error || 'خطای نامشخص');
 }
@@ -38,6 +63,8 @@ function App() {
   const [micEnabled, setMicEnabled] = useState(false);
   const [audioNeedsGesture, setAudioNeedsGesture] = useState(false);
   const [cleanupBusy, setCleanupBusy] = useState(false);
+  // Per-turn millisecond timings published by the agent on the diagnostics topic.
+  const [latency, setLatency] = useState(null);
   const roomRef = useRef(null);
   const avatarContainerRef = useRef(null);
   const avatarPlayerRef = useRef(null);
@@ -286,6 +313,12 @@ function App() {
               setDraftTranscript('');
             } else {
               setDraftTranscript(packet.text);
+            }
+          } else if (packet.type === 'latency') {
+            setLatency(packet);
+            const last = packet.last;
+            if (last) {
+              addLog('info', 'زمان‌بندی نوبت', formatLatency(packet));
             }
           } else if (packet.type === 'assistant_reply' && typeof packet.text === 'string') {
             addChat('assistant', packet.text, 'agent');
@@ -557,6 +590,26 @@ function App() {
                 <div><span>اتاق</span><strong>{connected ? 'متصل' : '—'}</strong></div>
               </div>
               <p className="status-note">اطلاعات سلامت API فقط وجود تنظیمات سرور را بررسی می‌کند و اتصال واقعی Spatius یا مدل را تضمین نمی‌کند.</p>
+              {latency && latency.last && (
+                <div className="latency-block">
+                  <div className="latency-head">
+                    <span>زمان‌بندی آخرین نوبت</span>
+                    <strong>{msLabel(latency.last.e2e_ms)}</strong>
+                  </div>
+                  {LATENCY_STAGES.map(([key, label]) => (
+                    latency.last.stages[key] === null || latency.last.stages[key] === undefined ? null : (
+                      <div className="latency-row" key={key}>
+                        <span>{label}</span>
+                        <div className="latency-bar">
+                          <i style={{ width: `${Math.min(100, ((latency.last.stages[key] || 0) / Math.max(latency.last.e2e_ms || 1, 1)) * 100)}%` }}/>
+                        </div>
+                        <b>{msLabel(latency.last.stages[key])}</b>
+                      </div>
+                    )
+                  ))}
+                  <small>{latency.turns} نوبت اندازه‌گیری‌شده · LATENCY_LOG برای میلی‌ثانیه‌ی هر نوبت در لاگ</small>
+                </div>
+              )}
             </section>
           </aside>
         </section>
