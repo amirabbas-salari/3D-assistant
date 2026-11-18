@@ -97,7 +97,6 @@ async def entrypoint(ctx: agents.JobContext) -> None:
     cloudflare_api_token = os.getenv("CLOUDFLARE_API_TOKEN", "").strip()
     llm_model = os.getenv(
         "CLOUDFLARE_LLM_MODEL",
-        "@cf/meta/llama-3.3-70b-instruct-fp8-fast",
     ).strip()
     try:
         llm_max_tokens = int(os.getenv("CLOUDFLARE_LLM_MAX_TOKENS", "8192"))
