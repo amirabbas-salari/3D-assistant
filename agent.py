@@ -95,6 +95,57 @@ class RoomLogHandler(logging.Handler):
             self.handleError(record)
 
 
+def _flag(name: str, default: bool) -> bool:
+    """Read a boolean env var, where an empty value means "use the default"."""
+    raw = os.getenv(name)
+    if raw is None or not raw.strip():
+        return default
+    return raw.strip().lower() in {"1", "true", "yes", "on"}
+
+
+def _llm_request_body(max_tokens: int, job_logger=None) -> dict:
+    """Build the Workers AI request body, including the reasoning-depth control.
+
+    gpt-oss reasons before it emits its first token, and every reasoning token
+    delays the first word the user hears. Measured on this pipeline, TTFT ranged
+    from 1.0 s to 5.4 s for the same short questions — that spread is the
+    thinking, not the network. Workers AI accepts the OpenAI-style
+    ``reasoning_effort``; "low" keeps short conversational answers fast. The
+    plugin only auto-fills this for OpenAI model names, so ``@cf/...`` models
+    must set it explicitly or thinking stays at the provider default depth.
+    """
+    fields: dict = {"max_tokens": max_tokens}
+    raw = os.getenv("CLOUDFLARE_LLM_REASONING_EFFORT", "low").strip().lower()
+    effort = "" if raw in {"", "default", "unset", "none"} else raw
+    if effort in {"low", "medium", "high"}:
+        fields["reasoning_effort"] = effort
+    elif effort:
+        if job_logger is not None:
+            job_logger.warning(
+                "Unknown CLOUDFLARE_LLM_REASONING_EFFORT=%r; not sent. "
+                "Valid values: low, medium, high, default",
+                raw,
+            )
+        effort = ""
+    # Some Workers AI endpoints want the nested Responses-API shape instead of
+    # the flat field. Off by default: an unknown field can turn a working
+    # request into a 400, so this is opt-in for after the flat one proves ignored.
+    if effort and os.getenv("CLOUDFLARE_LLM_REASONING_NESTED", "false").strip().lower() in {
+        "1",
+        "true",
+        "yes",
+        "on",
+    }:
+        fields["reasoning"] = {"effort": effort}
+    if job_logger is not None:
+        job_logger.info(
+            "LLM speed: reasoning_effort=%s, max_tokens=%s",
+            effort or "provider default",
+            max_tokens,
+        )
+    return fields
+
+
 def _avatar_provider() -> str:
     """Which avatar backend to run, or "none" to publish plain audio.
 
@@ -346,17 +397,26 @@ def _speed_profile(job_logger) -> dict:
 
 class PersianAssistant(Agent):
     def __init__(self) -> None:
-        super().__init__(
-            instructions=(
-                "تو همراه، یک دستیار صوتی فارسی‌زبان با صدای مرد، صمیمی، باهوش و دقیق هستی. "
-                "هرگاه درباره‌ی جنسیت یا صدای خودت پرسیدند، بگو صدای مرد داری. "
-                "همیشه به فارسی روان و طبیعی پاسخ بده، مگر اینکه کاربر صریحاً زبان دیگری بخواهد. "
-                "پاسخ‌های معمولی را برای گفتار کوتاه و روشن نگه دار؛ از نشانه‌گذاری و قالب‌بندی پیچیده پرهیز کن. "
-                "اگر کاربر متنی را برای روخوانی، تکرار یا بازگویی می‌فرستد، متن را کامل و بدون خلاصه‌کردن یا حذف در پاسخ بیاور تا TTS آن را بخواند. "
-                "در این حالت هرگز نگو امکان پخش یا خواندن صدا را نداری. "
-                "اگر پاسخ را نمی‌دانی، صادقانه بگو."
-            ),
+        fast_start = _flag("AGENT_FAST_START", True)
+        instructions = (
+            "تو همراه، یک دستیار صوتی فارسی‌زبان با صدای مرد، صمیمی، باهوش و دقیق هستی. "
+            "هرگاه درباره‌ی جنسیت یا صدای خودت پرسیدند، بگو صدای مرد داری. "
+            "همیشه به فارسی روان و طبیعی پاسخ بده، مگر اینکه کاربر صریحاً زبان دیگری بخواهد. "
+            "پاسخ‌های معمولی را برای گفتار کوتاه و روشن نگه دار؛ از نشانه‌گذاری و قالب‌بندی پیچیده پرهیز کن. "
+            "اگر کاربر متنی را برای روخوانی، تکرار یا بازگویی می‌فرستد، متن را کامل و بدون خلاصه‌کردن یا حذف در پاسخ بیاور تا TTS آن را بخواند. "
+            "در این حالت هرگز نگو امکان پخش یا خواندن صدا را نداری. "
+            "اگر پاسخ را نمی‌دانی، صادقانه بگو."
         )
+        if fast_start:
+            # TTS starts at the first sentence boundary, so a reply that opens
+            # with a short sentence starts speaking noticeably sooner — the same
+            # words, split. This is why the latency log's "sentence to TTS"
+            # stage improves without changing the model.
+            instructions += (
+                " همیشه پاسخ را با یک جمله‌ی کوتاه و کامل شروع کن (حداکثر شش کلمه)، بعد اگر لازم بود ادامه بده. "
+                "هرگز با عبارت‌های مقدمه‌چینی مثل «بگذار فکر کنم» یا «سوال خوبی است» شروع نکن."
+            )
+        super().__init__(instructions=instructions)
 
 
 @server.rtc_session(agent_name=os.getenv("LIVEKIT_AGENT_NAME", "hamrah-agent"))
@@ -390,6 +450,12 @@ async def entrypoint(ctx: agents.JobContext) -> None:
         room_log_handler.close()
 
     ctx.add_shutdown_callback(detach_room_log_handler)
+
+    fast_start_enabled = _flag("AGENT_FAST_START", True)
+    job_logger.info(
+        "Answer style: fast_start=%s (first sentence kept short so TTS starts sooner)",
+        fast_start_enabled,
+    )
 
     latency = LatencyTracker(job_logger)
     if latency.enabled:
@@ -495,6 +561,8 @@ async def entrypoint(ctx: agents.JobContext) -> None:
         json.dumps(turn_handling, ensure_ascii=False) if turn_handling else "SDK defaults",
     )
 
+    extra_body = _llm_request_body(llm_max_tokens, job_logger)
+
     session = AgentSession(
         stt=stt,
         llm=openai.LLM(
@@ -502,7 +570,7 @@ async def entrypoint(ctx: agents.JobContext) -> None:
             api_key=cloudflare_api_token,
             base_url=cloudflare_base_url,
             # Workers AI otherwise defaults to 256 output tokens for this model.
-            extra_body={"max_tokens": llm_max_tokens},
+            extra_body=extra_body,
         ),
         tts=tts,
         conn_options=session_conn_options,
