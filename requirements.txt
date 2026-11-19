@@ -5,3 +5,5 @@ livekit-plugins-openai~=1.8
 livekit-plugins-deepgram~=1.8
 livekit-plugins-google~=1.8
 python-dotenv>=1.0.0
+# RAG (optional): only needed when RAG_ENABLED=true
+chromadb>=1.0.0

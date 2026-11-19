@@ -6,3 +6,6 @@ dist/
 .env.*
 !.env.example
 .DS_Store
+
+# RAG index (generated, rebuilt from knowledge/ — never committed)
+.rag/

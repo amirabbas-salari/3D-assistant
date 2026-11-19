@@ -603,6 +603,7 @@ function App() {
                 <div><span>Agent</span><strong>{health?.agentName || 'نامشخص'}</strong></div>
                 <div><span>LLM</span><strong>{health?.llmModel || 'LiveKit Inference'}</strong></div>
                 <div><span>STT / TTS</span><strong>{health?.speechProvider === 'direct' ? 'Deepgram + Google (کلید مستقیم)' : health ? 'LiveKit Inference' : '—'}</strong></div>
+                <div><span>پایگاه دانش</span><strong>{health ? (health.ragEnabled ? `روشن · top ${health.ragTopK}` : 'خاموش') : '—'}</strong></div>
                 <div><span>اتاق</span><strong>{connected ? 'متصل' : '—'}</strong></div>
               </div>
               <p className="status-note">اطلاعات سلامت API فقط وجود تنظیمات سرور را بررسی می‌کند و اتصال واقعی Spatius یا مدل را تضمین نمی‌کند.</p>
