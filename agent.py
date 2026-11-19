@@ -5,6 +5,8 @@ import json
 import logging
 import os
 import re
+import time
+from pathlib import Path
 
 from dotenv import load_dotenv
 from livekit import agents, rtc
@@ -16,8 +18,11 @@ from livekit.agents import (
     RoomOutputOptions,
     SessionConnectOptions,
     inference,
+    llm,
 )
 from livekit.plugins import openai
+
+import rag as rag_module
 
 from latency import LatencyTracker
 
@@ -61,6 +66,11 @@ except ImportError as exc:  # pragma: no cover - depends on the installed extras
     google_plugin = None
     _google_import_error = exc
 
+PROJECT_ROOT = Path(__file__).resolve().parent
+
+# Project .env first (works no matter which directory you launch from), then the
+# usual upward search as a fallback. load_dotenv never overrides existing values.
+load_dotenv(PROJECT_ROOT / ".env")
 load_dotenv()
 
 server = agents.AgentServer()
@@ -395,8 +405,80 @@ def _speed_profile(job_logger) -> dict:
     return turn_handling
 
 
+def _load_knowledge(job_logger):
+    """Load the retrieval index once per session, or explain why it is off.
+
+    Returned separately from the tool so a missing index degrades to a plain
+    assistant instead of breaking the call to the LLM.
+    """
+    config = rag_module.rag_config(PROJECT_ROOT)
+    if config is None:
+        job_logger.info("RAG: off (set RAG_ENABLED=true to add a knowledge tool)")
+        return None, None
+
+    try:
+        index = rag_module.RagIndex.load(config["store_dir"], collection=config["collection"])
+    except ImportError:
+        # Only happens with RAG_ENABLED=true and chromadb never installed.
+        job_logger.warning(
+            "RAG: RAG_ENABLED is true but chromadb is not installed. "
+            "Run: pip install chromadb, then: python scripts/build_rag_index.py"
+        )
+        return None, None
+    except FileNotFoundError as exc:
+        job_logger.warning("RAG: %s", exc)
+        return None, None
+    except Exception as exc:  # noqa: BLE001 - never let retrieval setup kill a session
+        job_logger.warning("RAG: could not load the index (%s: %s)", type(exc).__name__, exc)
+        return None, None
+
+    job_logger.info("%s · %s chunks", rag_module.describe_config(config), len(index))
+    return index, config
+
+
+def _make_knowledge_tool(index, config, job_logger, timings: dict | None = None):
+    """Wrap ``index.search`` in a tool the LLM can call.
+
+    ``timings`` is the shared per-turn dict the latency report reads; the SDK
+    reports no metric for tool calls, so the only way to see this cost is to
+    measure it here.
+    """
+    top_k = config["top_k"]
+
+    @llm.function_tool(
+        name="search_knowledge",
+        description=(
+            "Search the organisation's knowledge base (policies, procedures, internal docs). "
+            "Call this for any factual question about the organisation instead of guessing. "
+            "Pass the user's question in Persian, as keywords or a short phrase."
+        ),
+    )
+    async def search_knowledge(query: str) -> str:
+        started = time.perf_counter()
+        hits = index.search(query, top_k=top_k)
+        if timings is not None:
+            timings["knowledge_lookup"] = (time.perf_counter() - started) * 1000
+        if not hits:
+            job_logger.info("RAG: no match for %r", query)
+            return (
+                "چیزی در پایگاه دانش پیدا نشد. به کاربر بگو که این موضوع در پایگاه دانش نیست "
+                "و از خودت پاسخ نساز."
+            )
+        job_logger.info(
+            "RAG: %r → %s",
+            query,
+            ", ".join(f"{h.chunk.source}/{h.chunk.heading}({h.score:.2f})" for h in hits),
+        )
+        return (
+            "متن‌های مرتبط از پایگاه دانش (فقط بر اساس همین‌ها پاسخ بده):\n\n"
+            + rag_module.format_hits(hits)
+        )
+
+    return search_knowledge
+
+
 class PersianAssistant(Agent):
-    def __init__(self) -> None:
+    def __init__(self, knowledge_tool=None) -> None:
         fast_start = _flag("AGENT_FAST_START", True)
         instructions = (
             "تو همراه، یک دستیار صوتی فارسی‌زبان با صدای مرد، صمیمی، باهوش و دقیق هستی. "
@@ -416,7 +498,17 @@ class PersianAssistant(Agent):
                 " همیشه پاسخ را با یک جمله‌ی کوتاه و کامل شروع کن (حداکثر شش کلمه)، بعد اگر لازم بود ادامه بده. "
                 "هرگز با عبارت‌های مقدمه‌چینی مثل «بگذار فکر کنم» یا «سوال خوبی است» شروع نکن."
             )
-        super().__init__(instructions=instructions)
+        if knowledge_tool is not None:
+            # The tool only helps if the model knows the answers must come from
+            # it — otherwise it quietly answers from its own priors, which is
+            # exactly the failure mode RAG is meant to prevent.
+            instructions += (
+                " درباره‌ی موضوع‌هایی که در پایگاه دانش سازمان هست، همیشه اول ابزار "
+                "search_knowledge را صدا بزن و فقط بر اساس همان نتیجه پاسخ بده. "
+                "اگر چیزی پیدا نشد، بگو در پایگاه دانش پیدا نکردی؛ از خودت نساز. "
+                "پاسخ را با جمله‌ی کوتاه شروع کن و منبع را طبیعی و کوتاه بگو."
+            )
+        super().__init__(instructions=instructions, tools=[knowledge_tool] if knowledge_tool else [])
 
 
 @server.rtc_session(agent_name=os.getenv("LIVEKIT_AGENT_NAME", "hamrah-agent"))
@@ -662,7 +754,9 @@ async def entrypoint(ctx: agents.JobContext) -> None:
                 stt_model=stt_model,
                 llm_model=llm_model,
                 tts_model=tts_model,
+                tool_ms=dict(tool_timings),
             )
+            tool_timings.clear()
             # Publish after recording, not when speech starts: the metrics for a
             # turn only exist once its assistant message is complete.
             asyncio.create_task(publish_latency())
@@ -701,8 +795,21 @@ async def entrypoint(ctx: agents.JobContext) -> None:
 
     ctx.room.on("data_received", on_room_data_received)
 
+    # Retrieval is loaded before the session starts so a broken index shows up
+    # in the log at startup rather than mid-conversation.
+    knowledge_index, knowledge_config = _load_knowledge(job_logger)
+    # The tool writes its own duration here; the report reads it. One dict for
+    # the session, reset after each recorded turn, so a turn without a lookup
+    # is not credited with the previous turn's time.
+    tool_timings: dict[str, float] = {}
+    knowledge_tool = (
+        _make_knowledge_tool(knowledge_index, knowledge_config, job_logger, tool_timings)
+        if knowledge_index is not None
+        else None
+    )
+
     await session.start(
-        agent=PersianAssistant(),
+        agent=PersianAssistant(knowledge_tool=knowledge_tool),
         room=ctx.room,
         # The avatar publishes synchronized speech audio; otherwise the agent
         # publishes its own TTS audio into the room.

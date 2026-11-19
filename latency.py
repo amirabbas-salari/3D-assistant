@@ -39,6 +39,9 @@ STAGES: tuple[tuple[str, str], ...] = (
     ("transcription_delay", "پایان گفتار ← متن نهایی STT"),
     ("llm_node_ttft", "درخواست LLM ← اولین توکن"),
     ("llm_node_ttfs", "درخواست LLM ← اولین جمله به TTS"),
+    # Report-only: the SDK does not emit a tool metric, so this is measured
+    # around our own search call. Appears only on turns that used the tool.
+    ("knowledge_lookup", "فراخوانی ابزار پایگاه دانش"),
     ("tts_node_ttfb", "اولین جمله ← اولین بایت صدا"),
     ("playback_latency", "اولین فریم ← شروع پخش"),
 )
@@ -57,6 +60,9 @@ STAGE_ADVICE: dict[str, str] = {
         "CLOUDFLARE_LLM_REASONING_EFFORT=low (پیش‌فرض) و با scripts/check_llm_speed.py اندازه بگیرید",
     "llm_node_ttfs":
         "مدل دیر جمله را می‌بندد → جمله‌ی اول کوتاه (AGENT_FAST_START=true) یا پاسخ کوتاه‌تر",
+    "knowledge_lookup":
+        "جست‌وجوی پایگاه دانش کند است → ایندکس بزرگ یا محل ذخیره‌سازی کند؛ "
+        "RAG_TOP_K را کم کنید (BM25 خودش میلی‌ثانیه‌ای است)",
     "tts_node_ttfb":
         "زمان اولین بایت صدا → مسیر TTS؛ با GeminiTTS واسط جمله‌ای SDK دخیل است",
     "playback_latency":
@@ -86,7 +92,10 @@ def fmt_ms(value: float | None) -> str:
         return f"{value / 1000:.2f}s"
     if value >= 100:
         return f"{value:.0f}ms"
-    return f"{value:.1f}ms"
+    if value >= 1:
+        return f"{value:.1f}ms"
+    # A local BM25 lookup lands here; "0.0ms" would look like a broken timer.
+    return f"{value:.2f}ms"
 
 
 def stage_ms(metrics: dict, key: str) -> float | None:
@@ -167,14 +176,22 @@ class LatencyTracker:
         stt_model: str | None = None,
         llm_model: str | None = None,
         tts_model: str | None = None,
+        tool_ms: dict[str, float] | None = None,
     ) -> TurnSample | None:
-        """Log one assistant turn and return its sample."""
+        """Log one assistant turn and return its sample.
+
+        ``tool_ms`` carries timings we measure ourselves (the SDK emits no
+        metric for tool calls), keyed by stage name.
+        """
         self._turn += 1
         assistant_stages = parse_metrics(metrics)
         # Merge the user half (endpointing, transcription) with the assistant
         # half (LLM, TTS, playback); whichever is missing stays None.
         stages = dict(self._pending_user or {})
         stages.update({k: v for k, v in assistant_stages.items() if v is not None})
+        for key, value in (tool_ms or {}).items():
+            if value is not None:
+                stages[key] = value
         for key in assistant_stages:
             stages.setdefault(key, None)
         self._pending_user = None

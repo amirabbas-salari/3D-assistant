@@ -94,6 +94,11 @@ app.get('/api/health', (_req, res) => {
     ttsVoice: process.env.LIVEKIT_TTS_VOICE || 'Charon',
     ttsLanguage: process.env.LIVEKIT_TTS_LANGUAGE || 'fa',
     livekitTtsConfigured: Boolean(process.env.LIVEKIT_URL && process.env.LIVEKIT_API_KEY && process.env.LIVEKIT_API_SECRET),
+    // RAG: the panel can only report the setting; the agent logs whether the
+    // index actually loaded, since that is where chromadb lives.
+    ragEnabled: /^(1|true|yes|on)$/i.test((process.env.RAG_ENABLED || '').trim()),
+    ragDocsDir: process.env.RAG_DOCS_DIR || 'knowledge',
+    ragTopK: Number(process.env.RAG_TOP_K || 3),
   });
 });
 

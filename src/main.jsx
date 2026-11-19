@@ -4,16 +4,29 @@ import {
   Activity, AudioLines, Check, CircleAlert, Copy, Mic, MicOff,
   RefreshCw, Send, Square, Trash2, Video, Volume2, Wifi, WifiOff,
 } from 'lucide-react';
+import { createLipSync } from './lipsync.js';
 import './styles.css';
 
-function RemoteAudioOutput({ track }) {
+function RemoteAudioOutput({ track, registry, onRegistered }) {
   const audioRef = useRef(null);
 
   useEffect(() => {
     if (!audioRef.current) return undefined;
     track.attach(audioRef.current);
-    return () => track.detach(audioRef.current);
-  }, [track]);
+    // The lip-sync gate needs the element that is actually playing the agent's
+    // voice; that is this one, created here and invisible on purpose.
+    if (registry) {
+      registry.current = [...registry.current.filter((item) => item !== audioRef.current), audioRef.current];
+      onRegistered?.(registry.current);
+    }
+    return () => {
+      track.detach(audioRef.current);
+      if (registry) {
+        registry.current = registry.current.filter((item) => item !== audioRef.current);
+        onRegistered?.(registry.current);
+      }
+    };
+  }, [track, registry, onRegistered]);
 
   return <audio ref={audioRef} autoPlay playsInline className="remote-audio-output" />;
 }
@@ -70,6 +83,29 @@ function App() {
   const avatarPlayerRef = useRef(null);
   const avatarViewRef = useRef(null);
   const motionWatchRef = useRef([]);
+  const lipSyncRef = useRef(null);
+  // The audio elements are created by React but consumed by a plain object, so
+  // they are collected here rather than passed through props.
+  const assistantAudioRefs = useRef([]);
+  // The avatar's mouth runs on its own 25fps clock while the voice comes from a
+  // media element, so motion lands slightly before the sound. This is how much
+  // later the first frames of a turn are released; see src/lipsync.js. The right
+  // value depends on the network path and the Spatius worker and no browser API
+  // reports it, so the tuned number is remembered per browser.
+  const [lipSyncOffset, setLipSyncOffset] = useState(() => {
+    const saved = Number(window.localStorage?.getItem('hamrah.lipSyncOffsetMs'));
+    return Number.isFinite(saved) && saved >= 0 && saved <= 600 ? saved : 120;
+  });
+  const lipSyncOffsetRef = useRef(lipSyncOffset);
+  useEffect(() => {
+    lipSyncOffsetRef.current = lipSyncOffset;
+    lipSyncRef.current?.configure({ offsetMs: lipSyncOffset });
+    try {
+      window.localStorage?.setItem('hamrah.lipSyncOffsetMs', String(lipSyncOffset));
+    } catch {
+      // Private mode or a full quota: the value simply is not remembered.
+    }
+  }, [lipSyncOffset]);
   // D-ID publishes a normal video track, so it renders into a plain <video>.
   const avatarVideoRef = useRef(null);
   // Guards against a double click racing the async setPhase('connecting'): two
@@ -269,6 +305,15 @@ function App() {
         await avatarKit.AvatarSDK.initialize(data.spatiusAppId, {
           drivingServiceMode: avatarKit.DrivingServiceMode.rtc,
         });
+        // The render backing buffer follows the panel's CSS size, which here is
+        // only a couple of hundred pixels tall — the avatar is then upscaled and
+        // looks soft. A minimum height keeps it sharp; 720 is enough for this
+        // panel without paying for a full-HD buffer on a laptop GPU.
+        try {
+          avatarKit.AvatarSDK.setRenderResolutionConfig?.(true, { minHeight: 720 });
+        } catch (error) {
+          addLog('warning', 'تنظیم دقت رندر آواتار اعمال نشد', errorMessage(error));
+        }
         const avatar = await avatarKit.AvatarManager.shared.load(data.spatiusAvatarId);
         const avatarView = new avatarKit.AvatarView(avatar, avatarContainerRef.current);
         avatarViewRef.current = avatarView;
@@ -286,12 +331,20 @@ function App() {
           };
         });
         const player = new avatarRtc.AvatarPlayer(new avatarRtc.LiveKitProvider(), avatarView);
+        // AvatarKit renders motion on its own clock; the synchroniser holds the
+        // opening frames of each turn so the mouth starts with the voice.
+        lipSyncRef.current = createLipSync();
+        lipSyncRef.current.configure({ offsetMs: lipSyncOffsetRef.current });
+        lipSyncRef.current.attachView(avatarView);
+        lipSyncRef.current.setAudioElements(assistantAudioRefs.current);
         player.on('error', (error) => addLog('error', 'خطای SDK آواتار Spatius', errorMessage(error)));
         // Motion (lip-sync) state comes from Spatius over the RTC adapter, not
         // from AvatarKit's own callback, which never fires in RTC mode.
         player.on('conversation-state-changed', (state) => {
           if (state === 'speaking') {
             addLog('info', 'آواتار شروع به صحبت کرد', 'حالت حرکتی Spatius: speaking');
+            // A new turn: allow the opening frames to be held back again.
+            lipSyncRef.current?.beginTurn();
             // Spatius needs a moment to synthesise motion, so the window starts
             // after the turn has begun rather than at the instant it starts.
             startMotionWatch();
@@ -443,6 +496,8 @@ function App() {
     avatarPlayerRef.current = null;
     avatarViewRef.current?.dispose();
     avatarViewRef.current = null;
+    lipSyncRef.current?.dispose();
+    lipSyncRef.current = null;
     roomRef.current?.disconnect();
     roomRef.current = null;
     setPhase('idle');
@@ -573,7 +628,14 @@ function App() {
             {/* Remote audio must stay mounted even with the avatar off, otherwise
                 the assistant is silent. With the avatar on, Spatius publishes
                 that audio; with it off, the agent publishes its own TTS audio. */}
-            <div className="audio-output" aria-hidden="true">{assistantAudioTracks.map((track) => <RemoteAudioOutput key={track.sid} track={track}/>)}</div>
+            <div className="audio-output" aria-hidden="true">{assistantAudioTracks.map((track) => (
+              <RemoteAudioOutput
+                key={track.sid}
+                track={track}
+                registry={assistantAudioRefs}
+                onRegistered={(elements) => lipSyncRef.current?.setAudioElements(elements)}
+              />
+            ))}</div>
             {avatarEnabled ? <section className="panel video-panel">
               <div className="panel-heading"><div><Video size={17}/><div><h2>تصویر آواتار</h2><small>{avatarReady ? (avatarProvider === 'did' ? 'ترک ویدیوی D-ID دریافت شد' : 'داده‌ی حرکت آواتار دریافت شد') : connected ? (avatarProvider === 'did' ? 'در انتظار ویدیوی D-ID' : 'در انتظار داده‌ی حرکت Spatius') : 'پس از اتصال نمایش داده می‌شود'}</small></div></div><span className={`video-state ${avatarReady ? 'ready' : ''}`}>{avatarReady ? 'آماده' : 'انتظار'}</span></div>
               <div className="video-stage">
@@ -584,6 +646,27 @@ function App() {
                 {audioNeedsGesture && <button className="audio-prompt" onClick={enableAudioPlayback}>برای شنیدن پاسخ، کلیک کنید</button>}
               </div>
               <div className="video-meta"><span><span className={`tiny-dot ${avatarReady ? 'green' : ''}`}/>{avatarReady ? 'آواتار وصل است' : 'آواتار وصل نیست'}</span><span><Volume2 size={14}/> {assistantAudioTracks.length} ترک صوتی</span></div>
+              {avatarProvider === 'spatius' && (
+                <div className="lipsync-control">
+                  <div className="lipsync-head">
+                    <span>هماهنگی لب و صدا</span>
+                    <strong>{lipSyncOffset} ms</strong>
+                  </div>
+                  <input
+                    type="range"
+                    min="0"
+                    max="600"
+                    step="10"
+                    value={lipSyncOffset}
+                    onChange={(event) => setLipSyncOffset(Number(event.target.value))}
+                    aria-label="تأخیر شروع حرکت لب"
+                  />
+                  <small>
+                    اگر لب‌ها <strong>زودتر</strong> از صدا حرکت می‌کنند عدد را زیاد کنید؛
+                    اگر دیرتر، کم کنید. تغییر بلافاصله روی نوبت بعدی اثر می‌گذارد.
+                  </small>
+                </div>
+              )}
             </section> : <section className="panel voice-panel">
               <div className="panel-heading"><div><AudioLines size={17}/><div><h2>صدا و متن</h2><small>آواتار خاموش است؛ STT، LLM و TTS کامل اجرا می‌شوند</small></div></div><span className="video-state ready">آماده</span></div>
               <div className="voice-body">
@@ -603,6 +686,7 @@ function App() {
                 <div><span>Agent</span><strong>{health?.agentName || 'نامشخص'}</strong></div>
                 <div><span>LLM</span><strong>{health?.llmModel || 'LiveKit Inference'}</strong></div>
                 <div><span>STT / TTS</span><strong>{health?.speechProvider === 'direct' ? 'Deepgram + Google (کلید مستقیم)' : health ? 'LiveKit Inference' : '—'}</strong></div>
+                <div><span>پایگاه دانش</span><strong>{health ? (health.ragEnabled ? `روشن · top ${health.ragTopK}` : 'خاموش') : '—'}</strong></div>
                 <div><span>اتاق</span><strong>{connected ? 'متصل' : '—'}</strong></div>
               </div>
               <p className="status-note">اطلاعات سلامت API فقط وجود تنظیمات سرور را بررسی می‌کند و اتصال واقعی Spatius یا مدل را تضمین نمی‌کند.</p>
