@@ -53,9 +53,10 @@ STAGE_ADVICE: dict[str, str] = {
     "transcription_delay":
         "نهایی‌شدن متن STT → مدل/زبان STT یا SPEECH_PROVIDER=direct را بررسی کنید",
     "llm_node_ttft":
-        "زمان اولین توکن مدل → مدل LLM یا شبکه‌ی Cloudflare؛ کلید/مدل دیگر را امتحان کنید",
+        "زمان اولین توکن مدل است، نه میکروفون → مدل gpt-oss پیش از پاسخ «فکر» می‌کند؛ "
+        "CLOUDFLARE_LLM_REASONING_EFFORT=low (پیش‌فرض) و با scripts/check_llm_speed.py اندازه بگیرید",
     "llm_node_ttfs":
-        "مدل دیر جمله را می‌بندد → پاسخ‌های کوتاه‌تر در دستور سیستم",
+        "مدل دیر جمله را می‌بندد → جمله‌ی اول کوتاه (AGENT_FAST_START=true) یا پاسخ کوتاه‌تر",
     "tts_node_ttfb":
         "زمان اولین بایت صدا → مسیر TTS؛ با GeminiTTS واسط جمله‌ای SDK دخیل است",
     "playback_latency":
@@ -291,7 +292,20 @@ class LatencyTracker:
                 f"  → گلوگاه: {STAGE_LABELS.get(worst_key, worst_key)} "
                 f"({fmt_ms(averages[worst_key])} میانگین)"
             )
-            if advice := STAGE_ADVICE.get(worst_key):
+            advice_key = worst_key
+            # When the first sentence follows the first token almost immediately,
+            # nothing is waiting on sentence closing — the wait is the model's
+            # own start-up (reasoning before the first token). Telling the user
+            # to "answer in shorter sentences" would point at the wrong knob.
+            ttft = averages.get("llm_node_ttft")
+            ttfs = averages.get("llm_node_ttfs")
+            if worst_key == "llm_node_ttfs" and ttft and ttfs and ttfs - ttft < 400:
+                advice_key = "llm_node_ttft"
+                lines.append(
+                    f"  → نکته: اولین جمله فقط {fmt_ms(ttfs - ttft)} بعد از اولین توکن آماده شد؛ "
+                    "پس انتظار مربوط به بسته‌شدن جمله نیست، به شروع پاسخ مدل است."
+                )
+            if advice := STAGE_ADVICE.get(advice_key):
                 lines.append(f"  → کار پیشنهادی: {advice}")
         text = "\n".join(lines)
         self._log.info(text)

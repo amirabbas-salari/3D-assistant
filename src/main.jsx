@@ -137,9 +137,15 @@ function App() {
     if (logRef.current) logRef.current.scrollTop = logRef.current.scrollHeight;
   }, [logs]);
 
+  // Reads the per-turn counter the SDK keeps, not the cumulative session one.
+  // The cumulative count rarely moves inside a 1.2 s window, so it reports "no
+  // motion" even while the face is visibly animating.
   function motionFrameCount() {
     const summary = avatarPlayerRef.current?.sessionSummary;
-    return Number(summary?.totalFrames) || 0;
+    if (!summary) return 0;
+    if (summary.turnFrameCount != null) return Number(summary.turnFrameCount) || 0;
+    if (summary.currentTurnFrames != null) return Number(summary.currentTurnFrames) || 0;
+    return Number(summary.totalFrames) || 0;
   }
 
   // A cheap fingerprint of what is currently drawn. Motion frames can arrive
@@ -178,13 +184,23 @@ function App() {
       const first = await canvasSignature();
       const later = window.setTimeout(async () => {
         const second = await canvasSignature();
-        const frames = motionFrameCount() - baseline;
+        // In room/RTC mode the SDK is told to use the clock we pass in, and a
+        // new player instance may have appeared since the baseline was taken;
+        // numbers from different players are not comparable, so only trust the
+        // delta when it is a real one.
+        const observed = motionFrameCount();
+        const frames = observed >= baseline ? observed - baseline : null;
         const changed = first && second ? first !== second : null;
         const details = [
-          `فریم حرکت در این بازه: ${frames}`,
+          frames === null ? 'شمارنده‌ی فریم بین دو نمونه بازنشانی شد' : `فریم حرکت در این بازه: ${frames}`,
           changed === null ? 'تصویر قابل نمونه‌برداری نبود' : changed ? 'تصویر در حال تغییر است' : 'تصویر تغییر نکرد',
         ].join(' · ');
-        if (frames === 0) {
+        if (frames === null) {
+          // The counter was replaced rather than merely unchanged: report what
+          // the picture says instead of claiming no motion arrived.
+          addLog(changed === false ? 'warning' : 'info',
+            changed === false ? 'تصویر آواتار در این بازه تغییر نکرد' : 'آواتار در حال حرکت است', details);
+        } else if (frames === 0) {
           addLog('warning', 'در این بازه فریم حرکتی به آواتار نرسید', details);
         } else if (changed === false) {
           addLog('warning', 'فریم حرکت می‌رسد اما تصویر آواتار تغییر نمی‌کند',
