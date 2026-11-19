@@ -282,6 +282,68 @@ def _validate_speech_config() -> None:
 _validate_speech_config()
 
 
+# Latency profiles, applied with AGENT_SPEED_PROFILE. Every value is a knob the
+# latency log (latency.py) can show the effect of, and "balanced" is the SDK's
+# own default so an unset variable changes nothing.
+#
+# Why each one matters, in the order a turn hits it:
+#   endpointing            silent wait after the user stops before the LLM is asked
+#   preemptive_generation  start the LLM — and optionally TTS — on the interim
+#                          transcript instead of waiting for the turn to be committed
+_SPEED_PROFILES: dict[str, dict] = {
+    "balanced": {},
+    "fast": {
+        # 200 ms of silence instead of 300: ~100 ms off every turn. The turn
+        # detector can still end the turn earlier when the text is clearly final.
+        "endpointing": {"min_delay": 0.2, "max_delay": 2.0},
+        "preemptive_generation": {"preemptive_tts": True, "max_speech_duration": 20.0},
+    },
+    "fastest": {
+        # Only for headsets or quiet rooms: pause mid-sentence and it will answer.
+        "endpointing": {"min_delay": 0.12, "max_delay": 1.5},
+        "preemptive_generation": {"preemptive_tts": True, "max_speech_duration": 30.0},
+    },
+}
+
+
+def _speed_profile(job_logger) -> dict:
+    """Turn-handling overrides for the selected latency profile.
+
+    Explicit AGENT_* variables win over the profile, so a single knob can be
+    tuned without abandoning the profile.
+    """
+    profile = os.getenv("AGENT_SPEED_PROFILE", "balanced").strip().lower() or "balanced"
+    if profile not in _SPEED_PROFILES:
+        job_logger.warning(
+            "Unknown AGENT_SPEED_PROFILE=%r; using 'balanced'. Valid: %s",
+            profile, ", ".join(_SPEED_PROFILES),
+        )
+        profile = "balanced"
+
+    turn_handling: dict = json.loads(json.dumps(_SPEED_PROFILES[profile]))  # deep copy
+
+    min_endpointing = os.getenv("AGENT_MIN_ENDPOINTING_DELAY", "").strip()
+    max_endpointing = os.getenv("AGENT_MAX_ENDPOINTING_DELAY", "").strip()
+    if min_endpointing or max_endpointing:
+        endpointing = turn_handling.setdefault("endpointing", {})
+        if min_endpointing:
+            endpointing["min_delay"] = float(min_endpointing)
+        if max_endpointing:
+            endpointing["max_delay"] = float(max_endpointing)
+
+    preemptive_tts = os.getenv("AGENT_PREEMPTIVE_TTS", "").strip().lower()
+    if preemptive_tts in {"1", "true", "yes", "on"}:
+        turn_handling.setdefault("preemptive_generation", {})["preemptive_tts"] = True
+    elif preemptive_tts in {"0", "false", "no", "off"}:
+        turn_handling.setdefault("preemptive_generation", {})["preemptive_tts"] = False
+
+    if profile != "balanced":
+        job_logger.info(
+            "Speed profile=%s → %s", profile, json.dumps(turn_handling, ensure_ascii=False)
+        )
+    return turn_handling
+
+
 class PersianAssistant(Agent):
     def __init__(self) -> None:
         super().__init__(
@@ -417,30 +479,21 @@ async def entrypoint(ctx: agents.JobContext) -> None:
         tts_model, tts_voice, tts_language,
     )
 
-    # Latency knobs, off by default so behaviour is unchanged until measured.
-    # The endpointing wait is often what the latency log fingers first: with the
-    # default streaming turn detector the session waits min_delay=0.3 s (up to
-    # max_delay=2.5 s) of silence after the last speech before it even starts the
-    # LLM, and that wait is invisible unless it is measured.
-    turn_handling: dict = {}
-    min_endpointing = os.getenv("AGENT_MIN_ENDPOINTING_DELAY", "").strip()
-    max_endpointing = os.getenv("AGENT_MAX_ENDPOINTING_DELAY", "").strip()
-    if min_endpointing or max_endpointing:
-        endpointing: dict = {}
-        if min_endpointing:
-            endpointing["min_delay"] = float(min_endpointing)
-        if max_endpointing:
-            endpointing["max_delay"] = float(max_endpointing)
-        turn_handling["endpointing"] = endpointing
-    preemptive_tts = os.getenv("AGENT_PREEMPTIVE_TTS", "").strip().lower()
-    if preemptive_tts in {"1", "true", "yes", "on"}:
-        # Start TTS before the turn is confirmed. Hides the first-sentence cost
-        # at the price of synthesising speech the user may never hear.
-        turn_handling["preemptive_generation"] = {"preemptive_tts": True}
-    if turn_handling:
-        job_logger.info(
-            "Turn handling overrides: %s", json.dumps(turn_handling, ensure_ascii=False)
-        )
+    turn_handling = _speed_profile(job_logger)
+    # Report what the pipeline actually does, so a slow turn can be traced to the
+    # stage that is not streaming. All three are streaming here: Deepgram and the
+    # Inference gateway stream STT, the Inference TTS streams, and GeminiTTS is
+    # wrapped by the SDK in a sentence-level StreamAdapter (the framework does
+    # this automatically for any non-streaming TTS, so speech still starts after
+    # the first sentence rather than after the whole reply).
+    job_logger.info(
+        "Streaming: STT=%s TTS=%s (%s) · turn_handling=%s",
+        getattr(stt.capabilities, "streaming", "?"),
+        getattr(tts.capabilities, "streaming", "?"),
+        "GeminiTTS via SDK StreamAdapter (sentence-level)" if not tts.capabilities.streaming
+        else "native streaming",
+        json.dumps(turn_handling, ensure_ascii=False) if turn_handling else "SDK defaults",
+    )
 
     session = AgentSession(
         stt=stt,
