@@ -74,7 +74,7 @@ load_dotenv(PROJECT_ROOT / ".env")
 load_dotenv()
 
 server = agents.AgentServer()
-logger = logging.getLogger("hamrah-voice-agent")
+logger = logging.getLogger("sam-voice-agent")
 _SECRET_PATTERN = re.compile(r"(?i)(api[_-]?key|secret|token)(\s*[:=]\s*)[^\s,;]+")
 
 
@@ -448,8 +448,11 @@ def _make_knowledge_tool(index, config, job_logger, timings: dict | None = None)
     @llm.function_tool(
         name="search_knowledge",
         description=(
-            "Search the organisation's knowledge base (policies, procedures, internal docs). "
-            "Call this for any factual question about the organisation instead of guessing. "
+            "Search the store's knowledge base: products (price, stock, specs, warranty), "
+            "store policies (shipping, returns, payment), and current offers. "
+            "Call this before stating ANY price, stock level, delivery time, warranty term, "
+            "discount or product spec — never answer those from memory. "
+            "Call it again with a different query if the first result does not contain the fact. "
             "Pass the user's question in Persian, as keywords or a short phrase."
         ),
     )
@@ -461,8 +464,9 @@ def _make_knowledge_tool(index, config, job_logger, timings: dict | None = None)
         if not hits:
             job_logger.info("RAG: no match for %r", query)
             return (
-                "چیزی در پایگاه دانش پیدا نشد. به کاربر بگو که این موضوع در پایگاه دانش نیست "
-                "و از خودت پاسخ نساز."
+                "چیزی در پایگاه دانش پیدا نشد. به کاربر بگو که این اطلاعات را در دسترس نداری "
+                "و از خودت عدد نساز. اگر سؤال درباره‌ی محصول بود، پیشنهاد بده کارشناس انسانی "
+                "پاسخ بدهد."
             )
         job_logger.info(
             "RAG: %r → %s",
@@ -477,11 +481,38 @@ def _make_knowledge_tool(index, config, job_logger, timings: dict | None = None)
     return search_knowledge
 
 
+def _assistant_name() -> str:
+    """The name the user hears, kept separate from the dispatch name."""
+    return (os.getenv("ASSISTANT_NAME") or "سام").strip()
+
+
+def _sales_prompt() -> str:
+    """The seller/marketer playbook, loaded from knowledge/sales_playbook.md.
+
+    It is a file rather than a string so the sales team can edit the way the
+    assistant sells without a code change or a redeploy. It deliberately lives
+    in prompts/ and not in knowledge/: behaviour belongs in every prompt, and
+    indexing it would let a product question retrieve sales coaching instead of
+    a product.
+    """
+    configured = (os.getenv("SALES_PLAYBOOK") or "prompts/sales_playbook.md").strip()
+    path = configured if os.path.isabs(configured) else PROJECT_ROOT / configured
+    try:
+        text = path.read_text(encoding="utf-8").strip()
+    except OSError:
+        return ""
+    # A playbook that has been accidentally emptied must not add an empty line
+    # to every prompt.
+    return text if len(text) >= 200 else ""
+
+
 class PersianAssistant(Agent):
     def __init__(self, knowledge_tool=None) -> None:
         fast_start = _flag("AGENT_FAST_START", True)
+        name = _assistant_name()
         instructions = (
-            "تو همراه، یک دستیار صوتی فارسی‌زبان با صدای مرد، صمیمی، باهوش و دقیق هستی. "
+            f"تو {name}، یک دستیار صوتی فارسی‌زبان با صدای مرد، صمیمی، باهوش و دقیق هستی. "
+            f"نام تو {name} است؛ اگر کسی اسمت را پرسید همین را بگو. "
             "هرگاه درباره‌ی جنسیت یا صدای خودت پرسیدند، بگو صدای مرد داری. "
             "همیشه به فارسی روان و طبیعی پاسخ بده، مگر اینکه کاربر صریحاً زبان دیگری بخواهد. "
             "پاسخ‌های معمولی را برای گفتار کوتاه و روشن نگه دار؛ از نشانه‌گذاری و قالب‌بندی پیچیده پرهیز کن. "
@@ -508,10 +539,23 @@ class PersianAssistant(Agent):
                 "اگر چیزی پیدا نشد، بگو در پایگاه دانش پیدا نکردی؛ از خودت نساز. "
                 "پاسخ را با جمله‌ی کوتاه شروع کن و منبع را طبیعی و کوتاه بگو."
             )
+        selling = _sales_prompt()
+        if selling:
+            # Placed after the base rules so its more specific guidance wins in
+            # practice, and gated on RAG being on: the playbook tells the agent
+            # to look up products, which is only possible with the tool.
+            instructions += (
+                "\n\nدستور کار فروش (این را در همه‌ی گفتگوها رعایت کن):\n" + selling
+            )
+            if knowledge_tool is None:
+                instructions += (
+                    "\n\nنکته: الان به پایگاه دانش دسترسی نداری. پس هیچ قیمت، موجودی یا "
+                    "مشخصات محصولی را از خودت نگو و کاربر را به همکار انسانی وصل کن."
+                )
         super().__init__(instructions=instructions, tools=[knowledge_tool] if knowledge_tool else [])
 
 
-@server.rtc_session(agent_name=os.getenv("LIVEKIT_AGENT_NAME", "hamrah-agent"))
+@server.rtc_session(agent_name=os.getenv("LIVEKIT_AGENT_NAME", "sam-voice-agent"))
 async def entrypoint(ctx: agents.JobContext) -> None:
     # Spatius registers room RPC handlers, so connect before starting the avatar.
     # AgentSession.start() reuses this connection.
@@ -530,7 +574,7 @@ async def entrypoint(ctx: agents.JobContext) -> None:
             # Avoid recursive diagnostics if the diagnostics channel itself fails.
             logger.warning("Could not publish room data message on topic %s", topic, exc_info=True)
 
-    job_logger = logging.getLogger(f"hamrah-voice-agent.{ctx.job.id}")
+    job_logger = logging.getLogger(f"sam-voice-agent.{ctx.job.id}")
     job_logger.setLevel(logging.INFO)
     room_log_handler = RoomLogHandler(
         lambda message: publish_room_message(message, topic="diagnostics")
@@ -544,10 +588,20 @@ async def entrypoint(ctx: agents.JobContext) -> None:
     ctx.add_shutdown_callback(detach_room_log_handler)
 
     fast_start_enabled = _flag("AGENT_FAST_START", True)
+    # Says both names on one line: the dispatch name is what the browser's
+    # status panel compares against, and the assistant name is what the user
+    # hears, so a mismatch between the two is the usual "wrong name" bug.
     job_logger.info(
-        "Answer style: fast_start=%s (first sentence kept short so TTS starts sooner)",
+        "Assistant: name=%s (dispatch=%s) · answer style fast_start=%s (first sentence kept short so TTS starts sooner)",
+        _assistant_name(),
+        os.getenv("LIVEKIT_AGENT_NAME", "sam-voice-agent"),
         fast_start_enabled,
     )
+    if _sales_prompt():
+        job_logger.info(
+            "Sales playbook loaded from %s — the assistant sells, it does not just answer",
+            os.getenv("SALES_PLAYBOOK", "prompts/sales_playbook.md"),
+        )
 
     latency = LatencyTracker(job_logger)
     if latency.enabled:

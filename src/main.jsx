@@ -93,7 +93,7 @@ function App() {
   // value depends on the network path and the Spatius worker and no browser API
   // reports it, so the tuned number is remembered per browser.
   const [lipSyncOffset, setLipSyncOffset] = useState(() => {
-    const saved = Number(window.localStorage?.getItem('hamrah.lipSyncOffsetMs'));
+    const saved = Number(window.localStorage?.getItem('sam.lipSyncOffsetMs'));
     return Number.isFinite(saved) && saved >= 0 && saved <= 600 ? saved : 120;
   });
   const lipSyncOffsetRef = useRef(lipSyncOffset);
@@ -101,7 +101,7 @@ function App() {
     lipSyncOffsetRef.current = lipSyncOffset;
     lipSyncRef.current?.configure({ offsetMs: lipSyncOffset });
     try {
-      window.localStorage?.setItem('hamrah.lipSyncOffsetMs', String(lipSyncOffset));
+      window.localStorage?.setItem('sam.lipSyncOffsetMs', String(lipSyncOffset));
     } catch {
       // Private mode or a full quota: the value simply is not remembered.
     }
@@ -588,7 +588,7 @@ function App() {
   return (
     <div className="app-shell" dir="rtl">
       <header className="topbar">
-        <div className="brand"><span className="brand-mark"><AudioLines size={18}/></span><div><strong>دستیار صوتی</strong><small>نمونه‌ی آزمایشی · محیط توسعه</small></div></div>
+        <div className="brand"><span className="brand-mark"><AudioLines size={18}/></span><div><strong>{health?.assistantName || 'سام'}</strong><small>دستیار فروش صوتی · محیط توسعه</small></div></div>
         <div className={`connection-pill ${connected ? 'is-connected' : ''}`}><span className="connection-dot"/>{connected ? 'متصل' : phase === 'connecting' ? 'در حال اتصال' : 'قطع'}</div>
       </header>
 
@@ -684,6 +684,7 @@ function App() {
               <div className="status-grid">
                 <div><span>API</span><strong className={health?.configured ? 'status-good' : health ? 'status-bad' : ''}>{health ? (health.configured ? 'پیکربندی‌شده' : 'ناقص') : 'در حال بررسی'}</strong></div>
                 <div><span>Agent</span><strong>{health?.agentName || 'نامشخص'}</strong></div>
+                <div><span>نام دستیار</span><strong>{health?.assistantName || 'سام'}</strong></div>
                 <div><span>LLM</span><strong>{health?.llmModel || 'LiveKit Inference'}</strong></div>
                 <div><span>STT / TTS</span><strong>{health?.speechProvider === 'direct' ? 'Deepgram + Google (کلید مستقیم)' : health ? 'LiveKit Inference' : '—'}</strong></div>
                 <div><span>پایگاه دانش</span><strong>{health ? (health.ragEnabled ? `روشن · top ${health.ragTopK}` : 'خاموش') : '—'}</strong></div>
