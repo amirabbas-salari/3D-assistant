@@ -44,13 +44,26 @@ DEFAULT_TOP_K = 3
 BM25_K1 = 1.5
 BM25_B = 0.75
 
+# How much a matching document title multiplies a chunk's score, per matching
+# token. Large enough to put the right product on top, small enough that it
+# cannot rescue a chunk with no body match at all.
+TITLE_BOOST = 1.5
+
 # Very common Persian words. Dropping them stops "و" or "که" from matching
 # every chunk; this is not a full stemmer, just the noise floor.
+#
+# Question words belong here for a subtler reason: BM25 rewards rarity, and a
+# question word is rare in a document collection precisely because it is
+# something you ask rather than write down. Left in, "گارانتی چند ماهه؟"
+# matched a marketing note on «چند» alone with a higher weight (3.53) than on
+# «گارانتی» (1.92), and answered a warranty question with sales advice. The
+# word that carries the answer is the noun, never the question word.
 _STOPWORDS = frozenset(
     """
     و در به از که این آن را با برای تا هم یا اگر ولی اما چون چه چیزی
     است هست بود شد شود می ها های هایش خود ما شما او آنها ایشان من
-    یک دو نه بله خیر آیا کدام کجا کی چگونه چرا چند بین روی زیر می نمی
+    یک دو نه بله خیر آیا کدام کجا کی چگونه چرا بین روی زیر می نمی
+    چند چقدر چنده چطور کدوم کدومه چیه باشد باشه بشه کرده کنند کنید
     """.split()
 )
 
@@ -100,13 +113,48 @@ def normalize(text: str) -> str:
 _VERB_PREFIXES = ("نمی", "می")
 
 
+# Persian attaches possessives and plurals directly to the noun: a customer
+# asks "قیمتش چنده؟" while the document says "قیمت:". Those are different
+# tokens, so the most natural way to ask a price would miss the price. The
+# suffixes below are the common ones; both forms are emitted, so a document
+# written in either style matches either question.
+_SUFFIXES = (
+    # Comparative and superlative: a customer asks "ارزان‌ترین کدام است؟"
+    # while the page says "ارزان‌تر". Both reduce to "ارزان".
+    "ترین", "تر",
+    "هایی", "هایم", "هایت", "هایش", "های", "ها",
+    # Colloquial spoken forms of the same endings ("قهوه‌سازتون").
+    "تون", "مون", "شون",
+    "مان", "تان", "شان", "یم", "ید", "ند", "ام", "ات", "اش",
+    "ش", "م", "ت",
+)
+
+
+def _stem_suffixes(word: str) -> str | None:
+    """The base form of a noun with a possessive/plural ending, if any."""
+    for suffix in _SUFFIXES:
+        if not word.endswith(suffix):
+            continue
+        stem = word[: -len(suffix)]
+        # A single letter is often part of the word itself ("قیمت" ends in
+        # "ت"), so a one-letter suffix only counts when plenty is left over.
+        if len(stem) >= (4 if len(suffix) == 1 else 3):
+            return stem
+        return None
+    return None
+
+
 def tokenize(text: str) -> list[str]:
     """Tokens used by BM25: normalised, stopwords removed, length >= 2."""
+    words = [t for t in _WORD_RE.findall(normalize(text)) if len(t) >= 2]
     tokens: list[str] = []
-    for token in _WORD_RE.findall(normalize(text)):
-        if len(token) < 2 or token in _STOPWORDS:
+    for token in words:
+        if token in _STOPWORDS:
             continue
         tokens.append(token)
+        base = _stem_suffixes(token)
+        if base:
+            tokens.append(base)
         for prefix in _VERB_PREFIXES:
             # Emit the stem, and for "نمی" also the "می" form, so a negated verb
             # still matches documents that only use the positive one. The bare
@@ -118,6 +166,15 @@ def tokenize(text: str) -> list[str]:
                     if prefix == "نمی":
                         tokens.append("می" + stem)
                 break
+    # Persian compounds are written both with a half-space and with a real
+    # space: "قهوه‌ساز" and "قهوه ساز" are the same product, but normalisation
+    # turns the first into one token and the second into two, so neither finds
+    # the other. Emitting every adjacent pair joined closes the gap in both
+    # directions without a dictionary. Applied to documents and queries alike,
+    # so the two spellings meet in the middle.
+    bases = [_stem_suffixes(word) or word for word in words]
+    for first, second in zip(bases, bases[1:]):
+        tokens.append(first + second)
     return tokens
 
 
@@ -130,6 +187,11 @@ class Chunk:
     source: str
     heading: str
     ordinal: int
+    # The document's level-1 heading. A question naming the document should
+    # prefer that document's chunks over guidance prose that merely mentions
+    # the same words, which is exactly how a price question was landing on a
+    # marketing note that happened to quote it.
+    title: str = ""
 
     def as_prompt_block(self, position: int) -> str:
         """Format for the LLM, with enough provenance to be quotable."""
@@ -157,7 +219,7 @@ def split_sentences(text: str) -> list[str]:
 
 
 def chunk_text(text: str, *, max_chars: int = DEFAULT_CHUNK_CHARS,
-               overlap: int = DEFAULT_OVERLAP_CHARS) -> list[tuple[str, str]]:
+               overlap: int = DEFAULT_OVERLAP_CHARS) -> list[tuple[str, str, str]]:
     """Split a document into (heading, chunk) pairs.
 
     Headings are tracked so a chunk knows where it came from. Splitting happens
@@ -166,8 +228,13 @@ def chunk_text(text: str, *, max_chars: int = DEFAULT_CHUNK_CHARS,
     chunk that starts mid-word, which reads as corruption and can change the
     meaning of the first line it sees.
     """
-    results: list[tuple[str, str]] = []
+    results: list[tuple[str, str, str]] = []
     heading = ""
+    # The level-1 heading names the document. Without it a chunk of product
+    # facts ("- قیمت: ۳٫۸۵۰٫۰۰۰ تومان") carries no product name at all, so a
+    # question naming the product cannot find it — the heading tracker below
+    # overwrites it with the nearest sub-heading ("قیمت و موجودی").
+    doc_title = ""
     buffer: list[str] = []
     size = 0
 
@@ -177,7 +244,10 @@ def chunk_text(text: str, *, max_chars: int = DEFAULT_CHUNK_CHARS,
             return
         body = " ".join(buffer).strip()
         if body:
-            results.append((heading, body))
+            if doc_title:
+                # Also what the model reads, so each chunk says what it is about.
+                body = f"{doc_title} — {body}"
+            results.append((heading, body, doc_title))
         # Choose whole trailing sentences for the overlap, newest-last.
         tail: list[str] = []
         tail_len = 0
@@ -194,7 +264,10 @@ def chunk_text(text: str, *, max_chars: int = DEFAULT_CHUNK_CHARS,
         match = _HEADING_RE.match(line)
         if match:
             flush()
-            heading = match.group(2).strip()
+            title = match.group(2).strip()
+            if len(match.group(1)) == 1 and not doc_title:
+                doc_title = title
+            heading = title
             # A heading is a hard boundary: carrying context across it would
             # label text from the previous section with the new section's name.
             buffer, size = [], 0
@@ -207,7 +280,7 @@ def chunk_text(text: str, *, max_chars: int = DEFAULT_CHUNK_CHARS,
             buffer.append(sentence)
             size += len(sentence) + 1
     flush()
-    return [(h, c) for h, c in results if len(c) >= 40]
+    return [(h, c, t) for h, c, t in results if len(c) >= 40]
 
 
 def iter_source_files(root: Path) -> list[Path]:
@@ -258,7 +331,7 @@ class LocalEmbedding:
         return [_hashed_embedding(text, self._dims) for text in input]
 
     def name(self) -> str:
-        return "hamrah-local-hash"
+        return "sam-local-hash"
 
     def get_config(self) -> dict:
         return {"dims": self._dims}
@@ -310,11 +383,12 @@ def build_index(
             "Add documents or set RAG_DOCS_DIR to the right folder."
         )
 
-    chunks: list[tuple[str, str, str, int]] = []
+    chunks: list[tuple[str, str, str, int, str]] = []
     for path in files:
         relative = str(path.relative_to(docs_dir))
-        for ordinal, (heading, text) in enumerate(chunk_text(_read_text(path), max_chars=max_chars, overlap=overlap)):
-            chunks.append((relative, heading, text, ordinal))
+        found = chunk_text(_read_text(path), max_chars=max_chars, overlap=overlap)
+        for ordinal, (heading, text, title) in enumerate(found):
+            chunks.append((relative, heading, text, ordinal, title))
 
     store_dir.mkdir(parents=True, exist_ok=True)
     client = chromadb.PersistentClient(path=str(store_dir))
@@ -333,7 +407,7 @@ def build_index(
 
     ids, documents, metadatas = [], [], []
     seen: dict[str, int] = {}
-    for source, heading, text, ordinal in chunks:
+    for source, heading, text, ordinal, title in chunks:
         digest = hashlib.blake2b(f"{source}|{ordinal}|{text}".encode(), digest_size=8).hexdigest()
         # Identical paragraphs in different files must not collapse into one id.
         count = seen.get(digest, 0)
@@ -341,7 +415,7 @@ def build_index(
         chunk_id = f"{digest}-{count}"
         ids.append(chunk_id)
         documents.append(text)
-        metadatas.append({"source": source, "heading": heading, "ordinal": ordinal})
+        metadatas.append({"source": source, "heading": heading, "ordinal": ordinal, "title": title})
 
     # Batched so a large folder does not build one huge request.
     for start in range(0, len(ids), 256):
@@ -380,6 +454,11 @@ class RagIndex:
         self._k1 = k1
         self._b = b
         self._tokens: list[list[str]] = [tokenize(c.text + " " + c.heading) for c in chunks]
+        # Title tokens are tracked separately: they are a strong identity signal
+        # ("is the question about this product?") and should not be drowned out
+        # by the body text, which in a guide-style document mentions the same
+        # words dozens of times.
+        self._title_tokens: list[set[str]] = [set(tokenize(c.title)) for c in chunks]
         self._lengths = [len(t) for t in self._tokens]
         self._avg_len = (sum(self._lengths) / len(self._lengths)) if self._lengths else 0.0
 
@@ -424,6 +503,7 @@ class RagIndex:
                 source=(meta or {}).get("source", "?"),
                 heading=(meta or {}).get("heading", ""),
                 ordinal=int((meta or {}).get("ordinal", 0)),
+                title=(meta or {}).get("title", ""),
             )
             for chunk_id, document, meta in zip(raw["ids"], raw["documents"], raw["metadatas"])
         ]
@@ -445,6 +525,18 @@ class RagIndex:
                 length = self._lengths[index] or 1
                 denominator = frequency + self._k1 * (1 - self._b + self._b * length / self._avg_len)
                 scores[index] += idf * (frequency * (self._k1 + 1)) / denominator
+
+        # A question that names the product must prefer that product's own
+        # page. Without this, "قهوه‌ساز A1 قیمتش چنده؟" ranked a sales-training
+        # note above the price page, because the note happens to quote the
+        # phrase "قیمتش چنده؟" while the price page says "قیمت:".
+        query_terms = set(terms)
+        for index, scored in enumerate(scores):
+            if not scored:
+                continue
+            title_overlap = len(query_terms & self._title_tokens[index])
+            if title_overlap:
+                scores[index] = scored * (1 + TITLE_BOOST * title_overlap)
 
         ranked = sorted(range(len(scores)), key=lambda i: scores[i], reverse=True)
         hits = [

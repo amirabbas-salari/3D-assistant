@@ -71,7 +71,8 @@ app.get('/api/health', (_req, res) => {
   res.json({
     ok: true,
     configured: isConfigured(),
-    agentName: process.env.LIVEKIT_AGENT_NAME || 'hamrah-agent',
+    agentName: process.env.LIVEKIT_AGENT_NAME || 'sam-voice-agent',
+    assistantName: (process.env.ASSISTANT_NAME || 'سام').trim(),
     llmProvider: 'Cloudflare Workers AI',
     llmModel: process.env.CLOUDFLARE_LLM_MODEL || '@cf/meta/llama-3.3-70b-instruct-fp8-fast',
     llmMaxTokens: Number(process.env.CLOUDFLARE_LLM_MAX_TOKENS || 8192),
@@ -116,7 +117,7 @@ app.post('/api/session', async (req, res) => {
     });
   }
 
-  const roomName = `hamrah-${randomUUID().slice(0, 12)}`;
+  const roomName = `sam-${randomUUID().slice(0, 12)}`;
   const identity = `guest-${randomUUID().slice(0, 8)}`;
   const name = typeof req.body?.name === 'string' ? req.body.name.slice(0, 80) : 'دوست من';
   const openingLine = typeof req.body?.message === 'string' ? req.body.message.trim().slice(0, 300) : '';
@@ -125,7 +126,7 @@ app.post('/api/session', async (req, res) => {
     const livekitHost = process.env.LIVEKIT_URL.replace(/^wss:\/\//, 'https://').replace(/^ws:\/\//, 'http://');
     const api = new LiveKitAPI({ host: livekitHost, apiKey: process.env.LIVEKIT_API_KEY, secret: process.env.LIVEKIT_API_SECRET });
     await api.room.createRoom({ name: roomName, emptyTimeout: 30, maxParticipants: 4 });
-    await api.agentDispatch.createDispatch(roomName, process.env.LIVEKIT_AGENT_NAME || 'hamrah-agent', {
+    await api.agentDispatch.createDispatch(roomName, process.env.LIVEKIT_AGENT_NAME || 'sam-voice-agent', {
       metadata: JSON.stringify({ opening_line: openingLine, participant_name: name }),
     });
 
@@ -173,7 +174,7 @@ app.post('/api/sessions/cleanup', async (_req, res) => {
     const livekitHost = process.env.LIVEKIT_URL.replace(/^wss:\/\//, 'https://').replace(/^ws:\/\//, 'http://');
     const api = new LiveKitAPI({ host: livekitHost, apiKey: process.env.LIVEKIT_API_KEY, secret: process.env.LIVEKIT_API_SECRET });
     const rooms = await api.room.listRooms();
-    const stale = rooms.filter((room) => String(room.name || '').startsWith('hamrah-'));
+    const stale = rooms.filter((room) => String(room.name || '').startsWith('sam-'));
     for (const room of stale) {
       await api.room.deleteRoom(room.name);
     }
