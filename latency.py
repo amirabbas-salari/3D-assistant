@@ -45,6 +45,23 @@ STAGES: tuple[tuple[str, str], ...] = (
 
 STAGE_LABELS = dict(STAGES)
 
+# What actually moves each stage. A bottleneck line that names a setting is
+# actionable; one that only names a duration is trivia.
+STAGE_ADVICE: dict[str, str] = {
+    "end_of_turn_delay":
+        "انتظار سکوت است، نه مدل → AGENT_SPEED_PROFILE=fast (یا AGENT_MIN_ENDPOINTING_DELAY)",
+    "transcription_delay":
+        "نهایی‌شدن متن STT → مدل/زبان STT یا SPEECH_PROVIDER=direct را بررسی کنید",
+    "llm_node_ttft":
+        "زمان اولین توکن مدل → مدل LLM یا شبکه‌ی Cloudflare؛ کلید/مدل دیگر را امتحان کنید",
+    "llm_node_ttfs":
+        "مدل دیر جمله را می‌بندد → پاسخ‌های کوتاه‌تر در دستور سیستم",
+    "tts_node_ttfb":
+        "زمان اولین بایت صدا → مسیر TTS؛ با GeminiTTS واسط جمله‌ای SDK دخیل است",
+    "playback_latency":
+        "تحویل صدا به خروجی → با آواتار روشن معمولاً همان مسیر آواتار است",
+}
+
 
 def _env_flag(name: str, default: bool) -> bool:
     raw = os.getenv(name)
@@ -274,6 +291,8 @@ class LatencyTracker:
                 f"  → گلوگاه: {STAGE_LABELS.get(worst_key, worst_key)} "
                 f"({fmt_ms(averages[worst_key])} میانگین)"
             )
+            if advice := STAGE_ADVICE.get(worst_key):
+                lines.append(f"  → کار پیشنهادی: {advice}")
         text = "\n".join(lines)
         self._log.info(text)
         return text
