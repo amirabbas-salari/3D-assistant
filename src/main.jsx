@@ -1,3 +1,4 @@
+// LEGACY SHIM — canonical: apps/web/src/main.jsx
 import React, { useEffect, useRef, useState } from 'react';
 import { createRoot } from 'react-dom/client';
 import {
@@ -40,6 +41,8 @@ const LATENCY_STAGES = [
   ['end_of_turn_delay', 'تشخیص پایان نوبت'],
   ['transcription_delay', 'متن نهایی STT'],
   ['llm_node_ttft', 'اولین توکن LLM'],
+  ['llm_node_ttfs', 'اولین جمله به TTS'],
+  ['knowledge_lookup', 'ابزار دانش'],
   ['tts_node_ttfb', 'اولین بایت صدا'],
   ['playback_latency', 'شروع پخش'],
   // A count, not a duration: how many TTS round-trips the reply cost.

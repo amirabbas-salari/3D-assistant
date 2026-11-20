@@ -20,8 +20,15 @@ import time
 from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
+sys.path.insert(0, str(Path(__file__).resolve().parent.parent / "apps/agent/src"))
 
-import rag  # noqa: E402  - after sys.path so the script runs from anywhere
+try:
+    import sam.rag.engine as rag  # new package layout
+    # shim: expose same names as legacy rag module
+    rag.resolve_path = rag.resolve_path
+    rag.build_index = rag.build_index
+except ImportError:
+    import rag  # noqa: E402  - legacy flat layout
 
 PROJECT_ROOT = Path(__file__).resolve().parent.parent
 

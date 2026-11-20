@@ -1,0 +1,9 @@
+{
+  "name": "@3d-assistant/agent",
+  "private": true,
+  "description": "Python LiveKit agent wrapper - see pyproject.toml",
+  "scripts": {
+    "dev": "python -m sam.agent dev",
+    "check": "python ../../scripts/check_env.py --skip-network && python ../../scripts/check_voice_flow.py"
+  }
+}

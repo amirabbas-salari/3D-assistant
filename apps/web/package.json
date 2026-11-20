@@ -1,0 +1,24 @@
+{
+  "name": "@3d-assistant/web",
+  "version": "1.0.0",
+  "private": true,
+  "type": "module",
+  "scripts": {
+    "dev": "vite --host 0.0.0.0",
+    "build": "vite build",
+    "preview": "vite preview --host 0.0.0.0",
+    "typecheck": "tsc --noEmit || echo 'no tsconfig - skip'"
+  },
+  "dependencies": {
+    "@spatius/avatarkit": "^1.3.11",
+    "@spatius/avatarkit-rtc": "^1.1.7",
+    "livekit-client": "^2.24.1",
+    "lucide-react": "^0.468.0",
+    "react": "^18.3.1",
+    "react-dom": "^18.3.1"
+  },
+  "devDependencies": {
+    "@vitejs/plugin-react": "^4.3.4",
+    "vite": "^6.0.7"
+  }
+}

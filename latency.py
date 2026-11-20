@@ -1,3 +1,4 @@
+# LEGACY SHIM — canonical: apps/agent/src/sam/latency/tracker.py
 """Millisecond turn-latency instrumentation for the voice pipeline.
 
 The agent already knows how long every stage took, but it only puts those numbers
@@ -60,10 +61,11 @@ STAGE_ADVICE: dict[str, str] = {
     "transcription_delay":
         "نهایی‌شدن متن STT → مدل/زبان STT یا SPEECH_PROVIDER=direct را بررسی کنید",
     "llm_node_ttft":
-        "زمان اولین توکن مدل است، نه میکروفون → مدل gpt-oss پیش از پاسخ «فکر» می‌کند؛ "
-        "CLOUDFLARE_LLM_REASONING_EFFORT=low (پیش‌فرض) و با scripts/check_llm_speed.py اندازه بگیرید",
+        "زمان اولین توکن مدل است، نه میکروفون → gpt-oss-120b پیش از پاسخ «فکر» می‌کند (reasoning); "
+        "TTFT اندازه‌گیری‌شده 1.0-5.4s برای سؤال‌های کوتاه؛ CLOUDFLARE_LLM_REASONING_EFFORT=low (پیش‌فرض) "
+        "و با scripts/check_llm_speed.py اندازه بگیرید — اگر بی‌اثر بود، مدل را به llama-3.3-70b-fp8-fast تغییر دهید (TTFT ~150ms) ",
     "llm_node_ttfs":
-        "مدل دیر جمله را می‌بندد → جمله‌ی اول کوتاه (AGENT_FAST_START=true) یا پاسخ کوتاه‌تر",
+        "مدل دیر جمله را می‌بندد → جمله‌ی اول کوتاه (AGENT_FAST_START=true, 5-9 کلمه)؛ LLM به‌صورت streaming token-by-token می‌آید و TTS در مرز جمله‌ی اول شروع می‌شود",
     "knowledge_lookup":
         "جست‌وجوی پایگاه دانش کند است → ایندکس بزرگ یا محل ذخیره‌سازی کند؛ "
         "RAG_TOP_K را کم کنید (BM25 خودش میلی‌ثانیه‌ای است)",

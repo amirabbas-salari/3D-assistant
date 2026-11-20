@@ -1,5 +1,8 @@
+// LEGACY SHIM — canonical: apps/api/src/index.js (see ARCHITECTURE.md)
+// Kept so `node server/index.js` still works.
 import 'dotenv/config';
 import express from 'express';
+import fs from 'node:fs';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { randomUUID } from 'node:crypto';
@@ -189,7 +192,11 @@ app.post('/api/sessions/cleanup', async (_req, res) => {
 });
 
 if (process.env.NODE_ENV === 'production') {
-  const clientDist = path.resolve(__dirname, '../dist');
+  const candidates = [
+    path.resolve(__dirname, '../dist'), // legacy: repo/dist
+    path.resolve(__dirname, '../apps/web/dist'), // monorepo: apps/web/dist
+  ];
+  const clientDist = candidates.find((p) => fs.existsSync(p)) || candidates[0];
   app.use(express.static(clientDist));
   app.get('*', (_req, res) => res.sendFile(path.join(clientDist, 'index.html')));
 }

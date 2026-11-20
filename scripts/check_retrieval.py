@@ -19,9 +19,16 @@ import sys
 from pathlib import Path
 
 ROOT = Path(__file__).resolve().parent.parent
+sys.path.insert(0, str(ROOT / "apps/agent/src"))
 sys.path.insert(0, str(ROOT))
 
-import rag  # noqa: E402  (needs the path above)
+try:
+    import sam.rag.engine as rag  # new package layout
+    # shim: expose same names as legacy rag module
+    rag.resolve_path = rag.resolve_path
+    rag.build_index = rag.build_index
+except ImportError:
+    import rag  # noqa: E402  - legacy flat layout
 
 # (question, a string that must be in the context, a label). The label exists
 # so a failure says what capability broke, not just "a test failed".
