@@ -44,6 +44,10 @@ STAGES: tuple[tuple[str, str], ...] = (
     ("knowledge_lookup", "فراخوانی ابزار پایگاه دانش"),
     ("tts_node_ttfb", "اولین جمله ← اولین بایت صدا"),
     ("playback_latency", "اولین فریم ← شروع پخش"),
+    # Not a duration: how many TTS requests this turn needed. Every request is a
+    # round-trip, and the wait for the next one is heard as a pause between
+    # sentences. A low count with a short first sentence is the goal.
+    ("tts_requests", "تعداد درخواست TTS در این نوبت"),
 )
 
 STAGE_LABELS = dict(STAGES)
@@ -67,6 +71,9 @@ STAGE_ADVICE: dict[str, str] = {
         "زمان اولین بایت صدا → مسیر TTS؛ با GeminiTTS واسط جمله‌ای SDK دخیل است",
     "playback_latency":
         "تحویل صدا به خروجی → با آواتار روشن معمولاً همان مسیر آواتار است",
+    "tts_requests":
+        "هر درخواست TTS یک رفت‌وبرگشت است و بین دو درخواست، وقفه شنیده می‌شود → "
+        "پاسخ تکه‌تکه است؛ جمله‌های کامل‌تر (AGENT_FAST_START) و preemptive TTS آن را کم می‌کند",
 }
 
 

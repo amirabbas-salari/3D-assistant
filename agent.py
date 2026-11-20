@@ -344,15 +344,29 @@ _validate_speech_config()
 
 
 # Latency profiles, applied with AGENT_SPEED_PROFILE. Every value is a knob the
-# latency log (latency.py) can show the effect of, and "balanced" is the SDK's
-# own default so an unset variable changes nothing.
+# latency log (latency.py) can show the effect of.
 #
 # Why each one matters, in the order a turn hits it:
 #   endpointing            silent wait after the user stops before the LLM is asked
 #   preemptive_generation  start the LLM — and optionally TTS — on the interim
 #                          transcript instead of waiting for the turn to be committed
 _SPEED_PROFILES: dict[str, dict] = {
-    "balanced": {},
+    # Preemptive generation has no audible cost: it starts the LLM — and the TTS
+    # after it — on the interim transcript while the turn is still being decided.
+    # If the transcript changes, the work is thrown away and the confirmed turn
+    # runs normally, so the worst case is a few wasted tokens, not a wrong
+    # answer. Because the next sentence's audio is then already in hand when the
+    # previous one finishes, it also removes the pause between sentences — which
+    # is why it is on in every profile, including "balanced".
+    #
+    # What it cannot fix is a TTS that splits the reply into many requests: the
+    # framework's own sentence tokenizer emits per sentence and is not
+    # configurable. That is why the instructions also ask for full sentences
+    # instead of fragments (see PersianAssistant below); the two together are
+    # what actually removes the stutter.
+    "balanced": {
+        "preemptive_generation": {"preemptive_tts": True, "max_speech_duration": 20.0},
+    },
     "fast": {
         # 200 ms of silence instead of 300: ~100 ms off every turn. The turn
         # detector can still end the turn earlier when the text is clearly final.
@@ -392,16 +406,34 @@ def _speed_profile(job_logger) -> dict:
         if max_endpointing:
             endpointing["max_delay"] = float(max_endpointing)
 
+    # A reply that gets cut off by a cough or a door and then resumed is heard as
+    # a pause in the middle of a thought. The SDK resumes after a false
+    # interruption by default, but only after ``false_interruption_timeout``
+    # seconds of silence — that wait *is* the pause. Raising the minimum speech
+    # length makes short noises less likely to count at all, and shortening the
+    # timeout makes a genuine false positive recover faster.
+    min_duration = os.getenv("AGENT_INTERRUPTION_MIN_DURATION", "").strip()
+    if min_duration:
+        try:
+            turn_handling.setdefault("interruption", {})["min_duration"] = float(min_duration)
+        except ValueError:
+            job_logger.warning("AGENT_INTERRUPTION_MIN_DURATION=%r is not a number; ignored", min_duration)
+    false_timeout = os.getenv("AGENT_FALSE_INTERRUPTION_TIMEOUT", "").strip()
+    if false_timeout:
+        try:
+            turn_handling.setdefault("interruption", {})["false_interruption_timeout"] = float(false_timeout)
+        except ValueError:
+            job_logger.warning("AGENT_FALSE_INTERRUPTION_TIMEOUT=%r is not a number; ignored", false_timeout)
+
     preemptive_tts = os.getenv("AGENT_PREEMPTIVE_TTS", "").strip().lower()
     if preemptive_tts in {"1", "true", "yes", "on"}:
         turn_handling.setdefault("preemptive_generation", {})["preemptive_tts"] = True
     elif preemptive_tts in {"0", "false", "no", "off"}:
         turn_handling.setdefault("preemptive_generation", {})["preemptive_tts"] = False
 
-    if profile != "balanced":
-        job_logger.info(
-            "Speed profile=%s → %s", profile, json.dumps(turn_handling, ensure_ascii=False)
-        )
+    job_logger.info(
+        "Speed profile=%s → %s", profile, json.dumps(turn_handling, ensure_ascii=False)
+    )
     return turn_handling
 
 
@@ -521,13 +553,25 @@ class PersianAssistant(Agent):
             "اگر پاسخ را نمی‌دانی، صادقانه بگو."
         )
         if fast_start:
-            # TTS starts at the first sentence boundary, so a reply that opens
-            # with a short sentence starts speaking noticeably sooner — the same
-            # words, split. This is why the latency log's "sentence to TTS"
-            # stage improves without changing the model.
+            # One sentence, not several short ones. The earlier version of this
+            # rule asked for "a short sentence (max six words) first" and the
+            # model delivered exactly that: "حتماً." / "بذارید چک کنم." / then the
+            # answer. Each of those is its own TTS request, and the wait for the
+            # next request is audible as a pause — so the rule bought a fast
+            # first word and paid for it with a stuttering reply. A single first
+            # sentence that already carries the answer starts just as fast and
+            # leaves nothing to fill in afterwards.
             instructions += (
-                " همیشه پاسخ را با یک جمله‌ی کوتاه و کامل شروع کن (حداکثر شش کلمه)، بعد اگر لازم بود ادامه بده. "
+                " پاسخ را با یک جمله‌ی کامل شروع کن که خودِ جواب (یا کار اصلی) در آن باشد؛ "
+                "نه یک کلمه‌ی تأیید و نه جمله‌ی تشریفاتی مثل «حتماً» یا «بذارید چک کنم». "
+                "این جمله‌ی اول را حدود هشت تا چهارده کلمه نگه دار: کوتاه بماند تا زود شروع شود، "
+                "ولی آن‌قدر کامل باشد که اگر جمله‌ی دومی هم گفتی، دومی فقط جزئیات باشد. "
                 "هرگز با عبارت‌های مقدمه‌چینی مثل «بگذار فکر کنم» یا «سوال خوبی است» شروع نکن."
+            )
+            instructions += (
+                " جمله‌ها را نشکن: هر جمله باید یک فکر کامل باشد و دست‌کم حدود هشت تا دوازده کلمه داشته باشد. "
+                "به‌جای چند جمله‌ی خیلی کوتاه و تکه‌تکه، دو یا سه جمله‌ی روان بنویس. "
+                "این برای صدا مهم است: جمله‌های ریز، گفتار را بریده‌بریده و پر از مکث می‌کند."
             )
         if knowledge_tool is not None:
             # The tool only helps if the model knows the answers must come from
@@ -537,7 +581,7 @@ class PersianAssistant(Agent):
                 " درباره‌ی موضوع‌هایی که در پایگاه دانش سازمان هست، همیشه اول ابزار "
                 "search_knowledge را صدا بزن و فقط بر اساس همان نتیجه پاسخ بده. "
                 "اگر چیزی پیدا نشد، بگو در پایگاه دانش پیدا نکردی؛ از خودت نساز. "
-                "پاسخ را با جمله‌ی کوتاه شروع کن و منبع را طبیعی و کوتاه بگو."
+                "پاسخ را با یک جمله‌ی کامل شروع کن که جواب در آن باشد و منبع را طبیعی و کوتاه بگو."
             )
         selling = _sales_prompt()
         if selling:
@@ -746,6 +790,16 @@ async def entrypoint(ctx: agents.JobContext) -> None:
     def on_user_input_transcribed(event) -> None:
         asyncio.create_task(publish_user_transcript(event))
 
+    # One metrics event per TTS request. Counting them is the only way to see
+    # whether a reply was spoken as one piece or as a dozen round-trips, which
+    # is what a listener hears as pausing.
+    tts_requests = {"turn": 0}
+
+    @session.on("metrics_collected")
+    def on_metrics_collected(event) -> None:
+        if getattr(event.metrics, "type", "") == "tts_metrics":
+            tts_requests["turn"] += 1
+
     rate_limit_hits = {"count": 0, "hinted": False}
 
     @session.on("error")
@@ -801,6 +855,10 @@ async def entrypoint(ctx: agents.JobContext) -> None:
         elif role == "assistant":
             text = (getattr(item, "text_content", "") or "").strip()
             job_logger.info("LLM produced assistant text (%d characters)", len(text))
+            if tts_requests["turn"]:
+                # Reported alongside the tool timing, which is measured the same
+                # way (in this process, not by the SDK).
+                tool_timings["tts_requests"] = float(tts_requests["turn"])
             latency.record_turn(
                 getattr(item, "metrics", None),
                 reply_text=text,
@@ -811,6 +869,7 @@ async def entrypoint(ctx: agents.JobContext) -> None:
                 tool_ms=dict(tool_timings),
             )
             tool_timings.clear()
+            tts_requests["turn"] = 0
             # Publish after recording, not when speech starts: the metrics for a
             # turn only exist once its assistant message is complete.
             asyncio.create_task(publish_latency())
