@@ -1,4 +1,8 @@
-"""Persian LiveKit voice agent with a pluggable avatar (D-ID or Spatius) and text fallback."""
+"""Persian LiveKit voice agent — LEGACY SHIM (canonical: apps/agent/src/sam/agent.py)
+
+This file is kept for `python agent.py dev` backward compatibility. New code lives in
+`apps/agent/src/sam/` (see ARCHITECTURE.md). It re-exports the same implementation; no behavior change.
+"""
 
 import asyncio
 import json
@@ -553,23 +557,19 @@ class PersianAssistant(Agent):
             "اگر پاسخ را نمی‌دانی، صادقانه بگو."
         )
         if fast_start:
-            # One sentence, not several short ones. The earlier version of this
-            # rule asked for "a short sentence (max six words) first" and the
-            # model delivered exactly that: "حتماً." / "بذارید چک کنم." / then the
-            # answer. Each of those is its own TTS request, and the wait for the
-            # next request is audible as a pause — so the rule bought a fast
-            # first word and paid for it with a stuttering reply. A single first
-            # sentence that already carries the answer starts just as fast and
-            # leaves nothing to fill in afterwards.
+            # One sentence, not several short ones. The first sentence is kept to
+            # 5-9 words so TTS starts immediately (first-sentence boundary), but it
+            # must already contain the answer — not a filler like "حتما" / "بذارید چک کنم".
+            # Each sentence is its own TTS request; tiny fragments cause audible pauses.
             instructions += (
                 " پاسخ را با یک جمله‌ی کامل شروع کن که خودِ جواب (یا کار اصلی) در آن باشد؛ "
                 "نه یک کلمه‌ی تأیید و نه جمله‌ی تشریفاتی مثل «حتماً» یا «بذارید چک کنم». "
-                "این جمله‌ی اول را حدود هشت تا چهارده کلمه نگه دار: کوتاه بماند تا زود شروع شود، "
-                "ولی آن‌قدر کامل باشد که اگر جمله‌ی دومی هم گفتی، دومی فقط جزئیات باشد. "
+                "این جمله‌ی اول را حدود پنج تا نه کلمه نگه دار: خیلی کوتاه بماند تا TTS بی‌درنگ شروع شود، "
+                "ولی جواب اصلی را همان‌جا بگو؛ جمله‌ی دوم فقط جزئیات باشد. "
                 "هرگز با عبارت‌های مقدمه‌چینی مثل «بگذار فکر کنم» یا «سوال خوبی است» شروع نکن."
             )
             instructions += (
-                " جمله‌ها را نشکن: هر جمله باید یک فکر کامل باشد و دست‌کم حدود هشت تا دوازده کلمه داشته باشد. "
+                " جمله‌ها را نشکن: هر جمله باید یک فکر کامل باشد و دست‌کم حدود شش تا ده کلمه داشته باشد. "
                 "به‌جای چند جمله‌ی خیلی کوتاه و تکه‌تکه، دو یا سه جمله‌ی روان بنویس. "
                 "این برای صدا مهم است: جمله‌های ریز، گفتار را بریده‌بریده و پر از مکث می‌کند."
             )
@@ -737,18 +737,22 @@ async def entrypoint(ctx: agents.JobContext) -> None:
 
     turn_handling = _speed_profile(job_logger)
     # Report what the pipeline actually does, so a slow turn can be traced to the
-    # stage that is not streaming. All three are streaming here: Deepgram and the
-    # Inference gateway stream STT, the Inference TTS streams, and GeminiTTS is
-    # wrapped by the SDK in a sentence-level StreamAdapter (the framework does
-    # this automatically for any non-streaming TTS, so speech still starts after
-    # the first sentence rather than after the whole reply).
+    # stage that is not streaming. All three are streaming here:
+    #   STT: Deepgram nova-3 streams interim transcripts (streaming=True)
+    #   LLM: Cloudflare Workers AI via openai.LLM with chat.completions.create(stream=True) —
+    #        tokens flow token-by-token through livekit.agents.inference.llm.LLMStream;
+    #        TTS starts at first sentence boundary, not after full reply.
+    #   TTS: Inference TTS streams natively; GeminiTTS is wrapped by SDK StreamAdapter
+    #        (sentence-level) so speech still starts after first sentence.
     job_logger.info(
-        "Streaming: STT=%s TTS=%s (%s) · turn_handling=%s",
-        getattr(stt.capabilities, "streaming", "?"),
-        getattr(tts.capabilities, "streaming", "?"),
-        "GeminiTTS via SDK StreamAdapter (sentence-level)" if not tts.capabilities.streaming
-        else "native streaming",
+        "Streaming: STT=%s (streaming=%s) · LLM=Cloudflare Workers AI streaming (openai.LLM stream=True, %s) · TTS=%s (%s) · turn_handling=%s · AGENT_FAST_START=%s (first sentence 5-9 words → TTS starts at sentence boundary)",
+        stt_model, getattr(stt.capabilities, "streaming", "?"),
+        llm_model,
+        tts_model,
+        "GeminiTTS via SDK StreamAdapter (sentence-level, TTS starts after first sentence)" if not tts.capabilities.streaming
+        else "native streaming (sentence tokenizer → per-sentence TTS requests)",
         json.dumps(turn_handling, ensure_ascii=False) if turn_handling else "SDK defaults",
+        fast_start_enabled,
     )
 
     extra_body = _llm_request_body(llm_max_tokens, job_logger)

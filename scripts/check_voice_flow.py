@@ -20,6 +20,7 @@ import sys
 from pathlib import Path
 
 ROOT = Path(__file__).resolve().parent.parent
+sys.path.insert(0, str(ROOT / "apps/agent/src"))
 sys.path.insert(0, str(ROOT))
 
 # agent.py validates its config at import time; give it the minimum it needs.
@@ -105,7 +106,7 @@ async def main() -> int:
     )
     check(
         "first sentence has a length target, not just 'short'",
-        "هشت تا چهارده کلمه" in instructions,
+        "پنج تا نه کلمه" in instructions,
     )
 
     # The profile that matters most: "balanced" must already carry preemptive

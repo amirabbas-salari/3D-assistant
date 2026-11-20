@@ -1,3 +1,4 @@
+// LEGACY SHIM — canonical: apps/web/vite.config.js
 import { defineConfig } from 'vite';
 import react from '@vitejs/plugin-react';
 import { avatarkitVitePlugin } from '@spatius/avatarkit/vite';

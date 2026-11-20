@@ -1,0 +1,23 @@
+# Root workspace — Python tooling for the monorepo.
+# The actual agent package lives in apps/agent; this file provides
+# shared lint/type settings and a convenience entrypoint.
+
+[tool.ruff]
+line-length = 100
+target-version = "py310"
+
+[tool.ruff.lint]
+select = ["E", "F", "B", "I"]
+ignore = ["E501"]
+
+[tool.pyright]
+typeCheckingMode = "basic"
+pythonVersion = "3.10"
+reportMissingImports = false
+
+[tool.pytest.ini_options]
+pythonpath = ["apps/agent/src", "."]
+testpaths = ["tests", "apps/agent/tests"]
+
+# Convenience: `pip install -e apps/agent` installs the agent package
+# while this file keeps ruff/pyright happy at the repo root.

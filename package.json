@@ -1,14 +1,23 @@
 {
-  "name": "hamrah-voice-assistant",
+  "name": "3d-assistant",
   "version": "1.0.0",
   "private": true,
   "type": "module",
+  "workspaces": [
+    "apps/web",
+    "apps/api"
+  ],
   "scripts": {
     "dev": "concurrently -k \"npm:dev:server\" \"npm:dev:client\"",
-    "dev:client": "vite --host 0.0.0.0",
-    "dev:server": "node server/index.js",
-    "build": "vite build",
-    "start": "node server/index.js"
+    "dev:client": "vite --config apps/web/vite.config.js --host 0.0.0.0",
+    "dev:server": "node apps/api/src/index.js",
+    "dev:legacy:client": "vite --host 0.0.0.0",
+    "dev:legacy:server": "node server/index.js",
+    "build": "vite build --config apps/web/vite.config.js && node -e \"import fs from 'node:fs'; fs.cpSync('apps/web/dist','dist',{recursive:true,force:true}); console.log('→ dist synced for legacy serve')\"",
+    "build:legacy": "vite build",
+    "start": "node apps/api/src/index.js",
+    "start:legacy": "node server/index.js",
+    "check": "python scripts/check_voice_flow.py && python scripts/check_retrieval.py"
   },
   "dependencies": {
     "@spatius/avatarkit": "^1.3.11",

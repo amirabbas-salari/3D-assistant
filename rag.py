@@ -1,3 +1,4 @@
+# LEGACY SHIM — canonical: apps/agent/src/sam/rag/engine.py (see ARCHITECTURE.md)
 """Local retrieval over a folder of documents, ranked with BM25.
 
 Why this shape
