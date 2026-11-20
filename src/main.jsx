@@ -42,6 +42,8 @@ const LATENCY_STAGES = [
   ['llm_node_ttft', 'اولین توکن LLM'],
   ['tts_node_ttfb', 'اولین بایت صدا'],
   ['playback_latency', 'شروع پخش'],
+  // A count, not a duration: how many TTS round-trips the reply cost.
+  ['tts_requests', 'درخواست TTS'],
 ];
 
 function msLabel(value) {
