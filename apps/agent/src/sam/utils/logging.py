@@ -11,8 +11,13 @@ class RoomLogHandler(logging.Handler):
         self._formatter = logging.Formatter()
     def emit(self, record):
         try:
+            try:
+                msg = record.getMessage()
+            except Exception:
+                # Bad % formatting — never crash the job
+                msg = str(record.msg)
             details = self._formatter.formatException(record.exc_info) if record.exc_info else ""
-            payload = {"type":"system_log","level":record.levelname.lower(),"message":redact(record.getMessage())[:1600],"details":redact(details)[:2600],"logger":record.name}
+            payload = {"type":"system_log","level":record.levelname.lower(),"message":redact(msg)[:1600],"details":redact(details)[:2600],"logger":record.name}
             asyncio.get_running_loop().create_task(self._publish_log(payload))
         except Exception:
             self.handleError(record)
