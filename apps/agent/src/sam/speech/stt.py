@@ -1,0 +1,34 @@
+import os
+from livekit.agents import inference, APIConnectOptions
+from .providers import speech_provider
+
+try:
+    from livekit.plugins import deepgram as deepgram_plugin
+    _deepgram_err=None
+except ImportError as exc:
+    deepgram_plugin=None
+    _deepgram_err=exc
+
+def build_stt(provider: str, *, model: str, language: str, conn_options: APIConnectOptions, fallback: list[str], job_logger):
+    if provider == "direct":
+        api_key=os.getenv("DEEPGRAM_API_KEY","").strip()
+        if not api_key: raise RuntimeError("SPEECH_PROVIDER=direct needs DEEPGRAM_API_KEY")
+        if deepgram_plugin is None: raise RuntimeError(f"deepgram plugin missing ({_deepgram_err})")
+        mname=model.split("/",1)[-1] if "/" in model else model
+        job_logger.info("STT via Deepgram API directly (model=%s, language=%s)", mname, language)
+        return deepgram_plugin.STT(model=mname, language=language, api_key=api_key)
+    return inference.STT(model=model, language=language, conn_options=conn_options, **({"fallback":fallback} if fallback else {}))
+
+def build_tts(provider: str, *, model: str, voice: str, language: str, conn_options: APIConnectOptions, job_logger):
+    if provider == "direct":
+        api_key=os.getenv("GOOGLE_API_KEY","").strip()
+        if not api_key: raise RuntimeError("SPEECH_PROVIDER=direct needs GOOGLE_API_KEY")
+        try:
+            from livekit.plugins import google as google_plugin
+            _gerr=None
+        except ImportError as exc:
+            raise RuntimeError(f"google plugin missing ({exc})")
+        mname=model.split("/",1)[-1] if "/" in model else model
+        job_logger.info("TTS via Google Gemini API directly (model=%s, voice=%s); language %s not sent to Gemini", mname, voice, language)
+        return google_plugin.beta.GeminiTTS(model=mname, voice_name=voice, api_key=api_key)
+    return inference.TTS(model=model, voice=voice, language=language, conn_options=conn_options)

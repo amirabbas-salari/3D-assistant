@@ -1,0 +1,1 @@
+export default { extends: ['eslint:recommended'], rules: { 'no-unused-vars': 'warn' } };

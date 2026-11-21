@@ -28,11 +28,11 @@ cp .env.example .env
 ```bash
 python -m venv .venv
 source .venv/bin/activate       # ویندوز: .venv\\Scripts\\activate
-pip install -r requirements.txt
-python agent.py dev
+pip install -e apps/agent
+python -m sam.agent dev
 ```
 
-> **دستور اجرا:** `python agent.py dev` بزنید. اگر LiveKit CLI را نصب کرده‌اید، `lk agent dev` روی این پروژه کار **نمی‌کند** — چون `package.json` در ریشه وجود دارد، `lk` پروژه را Node.js می‌شناسد و حتی با آرگومان `agent.py` هم آن را با `node` اجرا می‌کند. راه‌حل در بخش «خطای `no agent entrypoint found`» آمده است.
+> **دستور اجرا:** `python -m sam.agent dev` بزنید. اگر LiveKit CLI را نصب کرده‌اید، `lk agent dev` روی این پروژه کار **نمی‌کند** — چون `package.json` در ریشه وجود دارد، `lk` پروژه را Node.js می‌شناسد و حتی با آرگومان `agent.py` هم آن را با `node` اجرا می‌کند. راه‌حل در بخش «خطای `no agent entrypoint found`» آمده است.
 
 در ترمینال دیگر رابط وب و API را اجرا کنید:
 
@@ -46,6 +46,17 @@ Vite (معمولاً `http://localhost:5173`) درخواست‌های `/api` ر�
 npm run build
 NODE_ENV=production npm start
 ```
+
+## دستورات (کانonical)
+
+| کار | دستور |
+|---|---|
+| نصب | `npm install` + `pip install -e apps/agent` |
+| توسعه (web+api) | `npm run dev` |
+| ایجنت | `python -m sam.agent dev` |
+| بیلد | `npm run build` |
+| تولید | `NODE_ENV=production npm start` |
+| داکر | `docker compose -f infra/docker/docker-compose.yml up` |
 
 ## خطای `no agent entrypoint found`
 
@@ -98,10 +109,10 @@ Rename-Item package.json.bak package.json
 
 حالا `requirements.txt` پیدا می‌شود، نوع پروژه `PythonPip` می‌شود و CLI با `<python> -m livekit.agents dev agent.py` اجرا می‌کند — همان چیزی که انتظار دارید.
 
-اگر این جابه‌جایی را نمی‌خواهید، `python agent.py dev` دقیقاً همان کار را می‌کند:
+اگر این جابه‌جایی را نمی‌خواهید، `python -m sam.agent dev` دقیقاً همان کار را می‌کند:
 
 ```powershell
-python agent.py dev
+python -m sam.agent dev
 ```
 
 این روش کاملاً سالم است و مشکل نوع پروژه هم ندارد، ولی SDK پایتون نسخه‌ی ۱.۸.۱۲ آن را منسوخ اعلام می‌کند و hot-reload ندارد:
@@ -111,7 +122,7 @@ WARNING: dev mode is deprecated and will be removed in a future release; use `lk
 WARNING: in-process auto-reload has been removed from the Python CLI; use `lk agent dev` for hot-reload
 ```
 
-پس تا وقتی این پروژه هم `package.json` دارد، `python agent.py dev` ساده‌ترین گزینه است؛ اگر hot-reload می‌خواهید، جابه‌جایی موقت `package.json` لازم است.
+پس تا وقتی این پروژه هم `package.json` دارد، `python -m sam.agent dev` ساده‌ترین گزینه است؛ اگر hot-reload می‌خواهید، جابه‌جایی موقت `package.json` لازم است.
 
 ### کامنت انتهای خط در `.env`
 
@@ -180,11 +191,11 @@ lk agent dev agent.py --url wss://your-project.livekit.cloud --api-key APIxxxxxx
 lk cloud auth
 ```
 
-> **یادآوری:** `python agent.py dev` این مشکل را ندارد، چون `agent.py` خودش `.env` را با `load_dotenv()` می‌خواند. تفاوت اینجاست که `lk` و ایجنت دو مسیر جدا برای خواندن اعتبارنامه دارند.
+> **یادآوری:** `python -m sam.agent dev` این مشکل را ندارد، چون `agent.py` خودش `.env` را با `load_dotenv()` می‌خواند. تفاوت اینجاست که `lk` و ایجنت دو مسیر جدا برای خواندن اعتبارنامه دارند.
 
 ### اگر باز هم کار نکرد
 
-- **`lk` شناخته نمی‌شود:** LiveKit CLI جدا از SDK پایتون نصب می‌شود (`winget install LiveKit.LiveKitCLI`). نصبش اجباری نیست؛ `python agent.py dev` جایگزین کامل است.
+- **`lk` شناخته نمی‌شود:** LiveKit CLI جدا از SDK پایتون نصب می‌شود (`winget install LiveKit.LiveKitCLI`). نصبش اجباری نیست؛ `python -m sam.agent dev` جایگزین کامل است.
 - **`lk` پیام `could not detect project type` داد:** یعنی در آن پوشه نه `package.json` هست نه `requirements.txt`؛ از ریشه‌ی پروژه اجرا کنید.
 - **هر خطای دیگری درباره‌ی اعتبارنامه یا اتصال:** `python scripts/check_env.py` را بزنید؛ وجود `.env`، خالی بودن هر کلید، جابه‌جایی key/secret، تعارض `.env.local`، کوتیشن بسته‌نشده، و پذیرش واقعی کلید توسط LiveKit را جدا گزارش می‌کند. مقادیر را دقیقاً با همان قاعده‌ی python-dotenv و godotenv می‌خواند (کامنت انتهای خط، کوتیشن، `export`).
 - **`ModuleNotFoundError` برای `livekit` یا `latency`:** venv فعال نیست. با `python -c "import sys; print(sys.executable)"` مطمئن شوید از کدام مفسر استفاده می‌شود، بعد `pip install -r requirements.txt` را در همان محیط بزنید.
@@ -578,7 +589,7 @@ python scripts/build_rag_index.py
 RAG_ENABLED=true
 
 # ۳) اجرا
-python agent.py dev
+python -m sam.agent dev
 ```
 
 ### چرا Chroma + BM25 و نه فقط Chroma

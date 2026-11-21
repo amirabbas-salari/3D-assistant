@@ -2,10 +2,14 @@ node_modules/
 .venv/
 __pycache__/
 dist/
+apps/web/dist
 .env
 .env.*
 !.env.example
 .DS_Store
-
-# RAG index (generated, rebuilt from knowledge/ — never committed)
 .rag/
+*.bak
+*.monolith.bak
+.coverage
+.pytest_cache/
+ruff_cache/
