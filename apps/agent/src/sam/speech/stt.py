@@ -20,6 +20,25 @@ def build_stt(provider: str, *, model: str, language: str, conn_options: APIConn
     return inference.STT(model=model, language=language, conn_options=conn_options, **({"fallback":fallback} if fallback else {}))
 
 def build_tts(provider: str, *, model: str, voice: str, language: str, conn_options: APIConnectOptions, job_logger):
+    if provider == "cloudflare":
+        # New: Cloudflare Workers AI → elevenlabs/eleven-v3
+        from .cloudflare_tts import CloudflareTTS
+
+        cf_model = os.getenv("CLOUDFLARE_TTS_MODEL", model).strip() or model
+        # voice_id can be explicit or fallback to LIVEKIT_TTS_VOICE
+        cf_voice_id = (
+            os.getenv("CLOUDFLARE_TTS_VOICE_ID", "").strip()
+            or os.getenv("ELEVENLABS_VOICE_ID", "").strip()
+            or voice
+        )
+        # sample_rate: prefer CLOUDFLARE_TTS_SAMPLE_RATE else 24000
+        try:
+            sr = int(os.getenv("CLOUDFLARE_TTS_SAMPLE_RATE", "24000").strip() or "24000")
+        except ValueError:
+            sr = 24000
+        job_logger.info("TTS via Cloudflare Workers AI (model=%s, voice_id=%s, lang=%s, sr=%s)", cf_model, cf_voice_id, language, sr)
+        return CloudflareTTS(model=cf_model, voice_id=cf_voice_id, sample_rate=sr)
+
     if provider == "direct":
         api_key=os.getenv("GOOGLE_API_KEY","").strip()
         if not api_key: raise RuntimeError("SPEECH_PROVIDER=direct needs GOOGLE_API_KEY")

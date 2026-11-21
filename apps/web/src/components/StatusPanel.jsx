@@ -11,7 +11,7 @@ export default function StatusPanel({ health, latency, connected }) {
         <div><span>Agent</span><strong>{health?.agentName || 'نامشخص'}</strong></div>
         <div><span>نام دستیار</span><strong>{health?.assistantName || 'سام'}</strong></div>
         <div><span>LLM</span><strong>{health?.llmModel || 'LiveKit Inference'}</strong></div>
-        <div><span>STT / TTS</span><strong>{health?.speechProvider === 'direct' ? 'Deepgram + Google (کلید مستقیم)' : health ? 'LiveKit Inference' : '—'}</strong></div>
+        <div><span>STT / TTS</span><strong>{health?.ttsProviderLabel || (health?.speechProvider === 'direct' ? 'Deepgram + Google (کلید مستقیم)' : health ? 'LiveKit Inference' : '—')}</strong></div>
         <div><span>پایگاه دانش</span><strong>{health ? (health.ragEnabled ? `روشن · top ${health.ragTopK}` : 'خاموش') : '—'}</strong></div>
         <div><span>اتاق</span><strong>{connected ? 'متصل' : '—'}</strong></div>
       </div>
