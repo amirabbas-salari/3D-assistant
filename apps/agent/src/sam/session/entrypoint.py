@@ -79,7 +79,13 @@ async def entrypoint(ctx: agents.JobContext) -> None:
     stt = build_stt(provider, model=stt_model, language=stt_language, conn_options=inference_conn_options, fallback=stt_fallback_models, job_logger=job_logger)
     tts = build_tts(provider, model=tts_model, voice=tts_voice, language=tts_language, conn_options=inference_conn_options, job_logger=job_logger)
 
-    job_logger.info("Voice pipeline: STT=%s/%s, LLM=%s/%s, TTS=%s/%s voice=%s", "Direct" if provider=="direct" else "Inference", stt_model, stt_language, llm_model, llm_max_tokens, "Direct" if provider=="direct" else "Inference", tts_model, tts_voice, tts_language)
+    job_logger.info(
+        "Voice pipeline: STT=%s/%s/%s, LLM=%s (max_tokens=%s), TTS=%s/%s voice=%s lang=%s",
+        "Direct" if provider == "direct" else "Inference",
+        stt_model, stt_language, llm_model, llm_max_tokens,
+        "Direct" if provider == "direct" else "Inference",
+        tts_model, tts_voice, tts_language,
+    )
 
     turn_handling = speed_profile(job_logger)
     job_logger.info("Streaming: STT=%s (streaming=%s) · LLM=%s streaming · TTS=%s (%s) · turn_handling=%s · FAST_START=%s",
