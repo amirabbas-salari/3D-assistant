@@ -383,6 +383,7 @@ AGENT_SPEED_PROFILE=ultra   # هدف <۱ ثانیه؛ با هدست/محیط آ�
 
 | پروفایل | endpointing | preemptive | چه زمانی |
 | --- | --- | --- | --- |
+| `instant` (هدف <۰.۷ثانیه — فقط هدستِ خوب) | `0.05` / `0.8` s | LLM + TTS + interruption tuning | سریع‌ترین — فقط هدستِ خوب |
 | `ultra` (پیش‌فرضِ جدید — هدف <۱ ثانیه) | `0.08` / `1.0` s | LLM + TTS + interruption tuning | با هدست/محیط آرام؛ کمترین مکث |
 | `fastest` | `0.12` / `1.5` s | LLM + TTS | فقط با هدست؛ با مکث میان جمله پاسخ می‌دهد |
 | `fast` | `0.2` / `2.0` s | LLM + TTS | حدود ۱۰۰ تا ۴۰۰ میلی‌ثانیه سریع‌تر در هر نوبت |
@@ -444,7 +445,7 @@ python scripts/check_voice_flow.py
 | STT (Deepgram nova-3 یا گیت‌وی) | ✅ جریانی (`capabilities.streaming=True`)، با aligned transcript |
 | LLM (Cloudflare Workers AI) | ✅ جریانی، token به token |
 | TTS با `SPEECH_PROVIDER=inference` | ✅ جریانی |
-| TTS با `SPEECH_PROVIDER=direct` (`GeminiTTS`) | ⚠️ خودش جریانی نیست، ولی SDK **خودکار** آن را در `StreamAdapter` جمله‌به‌جمله می‌پیچد |
+| TTS با `SPEECH_PROVIDER=direct` (`GeminiTTS`) | ✅ SDK خودکار در `StreamAdapter` جمله‌به‌جمله می‌پیچد — بعدِ جمله‌ی اول صدا می‌آید (استریمِ واقعی) |
 
 مورد آخر مهم است: `GeminiTTS` مقدار `capabilities.streaming=False` دارد، ولی `Agent.tts_node` در SDK هر TTS غیرجریانی را در یک `StreamAdapter` با `SentenceTokenizer` می‌پیچد. نتیجه این است که صدا بعد از **اولین جمله** شروع می‌شود، نه بعد از کل پاسخ؛ پس نوبت پشت سر هم قفل نمی‌شود. در لاگ استارت‌آپ هم صریح نوشته می‌شود که کدام حالت فعال است.
 

@@ -424,6 +424,12 @@ _SPEED_PROFILES: dict[str, dict] = {
         # Ignore very short noises so 80ms endpointing doesn't misfire on breaths
         "interruption": {"min_duration": 0.6, "false_interruption_timeout": 0.6},
     },
+    # Instant: target <0.7s. Only with good headset — 50ms endpointing.
+    "instant": {
+        "endpointing": {"min_delay": 0.05, "max_delay": 0.8},
+        "preemptive_generation": {"preemptive_tts": True, "max_speech_duration": 40.0},
+        "interruption": {"min_duration": 0.5, "false_interruption_timeout": 0.5},
+    },
 }
 
 
@@ -526,10 +532,9 @@ def _make_knowledge_tool(index, config, job_logger, timings: dict | None = None)
     @llm.function_tool(
         name="search_knowledge",
         description=(
-            "Search the organization's knowledge base (brand guide, FAQ, internal docs). "
-            "Call it when the question is about internal facts that may be in the docs. "
-            "If nothing is found, answer from general sales/marketing expertise and ask for details. "
-            "Pass the user's question in Persian, as keywords or a short phrase."
+            "Search the organization knowledge base (services, portfolio, FAQ). "
+            "Call it when the question is about internal facts, pricing, process or past projects. "
+            "Pass query in Persian keywords. Streams: tool returns fast (<5ms BM25), then LLM streams final answer."
         ),
     )
     async def search_knowledge(query: str) -> str:
@@ -555,6 +560,28 @@ def _make_knowledge_tool(index, config, job_logger, timings: dict | None = None)
 
     return search_knowledge
 
+
+
+def _rag_preload(query: str, index, config, job_logger, timings: dict | None = None) -> str | None:
+    """Synchronous RAG lookup to inject context BEFORE LLM streams (saves 1 LLM roundtrip).
+    When RAG_PRELOAD=true, we call this on every user turn and inject hits as chat ctx,
+    so LLM streams directly with knowledge — no tool-call pause. Sub-1s friendly.
+    """
+    if not query or not query.strip():
+        return None
+    started = time.perf_counter()
+    try:
+        hits = index.search(query.strip(), top_k=config["top_k"])
+    except Exception as exc:
+        job_logger.warning("RAG preload search failed: %s", exc)
+        return None
+    if timings is not None:
+        timings["knowledge_lookup"] = (time.perf_counter() - started) * 1000
+    if not hits:
+        job_logger.info("RAG preload: no match for %r", query[:80])
+        return None
+    job_logger.info("RAG preload: %r → %s", query[:80], ", ".join(f"{h.chunk.source}({h.score:.2f})" for h in hits))
+    return rag_module.format_hits(hits)
 
 def _assistant_name() -> str:
     """The name the user hears, kept separate from the dispatch name."""
@@ -608,11 +635,17 @@ class PersianAssistant(Agent):
                 "جمله‌ها رو نشکن: هر جمله یه فکر کامل (۶-۱۰ کلمه کافیه)، نه تکه‌تکه. دو سه جمله‌ی روان = صدای طبیعی بدون مکث."
             )
         if knowledge_tool is not None:
-            instructions += (
-                " اگر پایگاه دانش سازمان فعال است و سؤال به اسناد داخلی مربوط است، "
-                "اول ابزار search_knowledge را صدا بزن و بر اساس نتیجه پاسخ بده. "
-                "اگر چیزی پیدا نشد، صادقانه بگو و با دانش عمومی ادامه بده — عدد یا نقل‌قول نساز."
-            )
+            # Streaming note: in preload mode context is already injected, no tool call needed.
+            # In tool mode, LLM streams → pauses → tool → streams again (1 extra roundtrip ~800ms).
+            preload = os.getenv("RAG_PRELOAD", "false").strip().lower() in {"1","true","yes","on"}
+            if preload:
+                instructions += " پایگاه دانش قبلِ جواب به پرامپت اضافه شده؛ مستقیم با همان اطلاعات جواب بده، ابزار صدا نزن."
+            else:
+                instructions += (
+                    " اگر پایگاه دانش فعال است و سؤال به خدمات/نمونه‌کار/قیمت شرکت مربوط است، "
+                    "ابزار search_knowledge را صدا بزن (استریم قطع می‌شود و دوباره وصل — ۱ راندتریپ اضافه). "
+                    "اگر چیزی پیدا نشد صادقانه بگو و با دانش عمومی ادامه بده."
+                )
         selling = _sales_prompt()
         if selling:
             instructions += (
@@ -875,6 +908,19 @@ async def entrypoint(ctx: agents.JobContext) -> None:
             text = (getattr(item, "text_content", "") or "").strip()
             if text:
                 job_logger.info("User turn committed (%d characters)", len(text))
+                # RAG_PRELOAD for voice: inject knowledge BEFORE LLM streams (no tool pause)
+                if knowledge_index is not None and os.getenv("RAG_PRELOAD", "false").strip().lower() in {"1","true","yes","on"}:
+                    try:
+                        preload_ctx = _rag_preload(text, knowledge_index, knowledge_config, job_logger, tool_timings)
+                        if preload_ctx and hasattr(session, "chat_ctx") and session.chat_ctx is not None:
+                            # Inject as system context so next LLM turn streams with it
+                            try:
+                                session.chat_ctx.add_message(role="system", content=f"دانش مرتبط (از پایگاه شرکت):\n{preload_ctx}")
+                                job_logger.info("RAG voice preload injected (%d chars)", len(preload_ctx))
+                            except Exception as e:
+                                job_logger.warning("RAG chat_ctx inject failed: %s", e)
+                    except Exception as e:
+                        job_logger.warning("RAG voice preload failed: %s", e)
             # Endpointing and transcription timing live on the user message;
             # hold them until the assistant message closes the same turn.
             latency.note_user_turn(getattr(item, "metrics", None))
@@ -910,7 +956,18 @@ async def entrypoint(ctx: agents.JobContext) -> None:
         job_logger.info("Text chat input received from %s (%d characters)", sender, len(text))
         try:
             session.interrupt()
-            speech_handle = session.generate_reply(user_input=text)
+            # RAG_PRELOAD: استریمِ واقعی — دانش قبلِ LLM تزریق میشه، بدونِ راندِ اضافه
+            if knowledge_index is not None and os.getenv("RAG_PRELOAD", "false").strip().lower() in {"1","true","yes","on"}:
+                preload_ctx = _rag_preload(text, knowledge_index, knowledge_config, job_logger, tool_timings)
+                if preload_ctx:
+                    speech_handle = session.generate_reply(
+                        user_input=text,
+                        instructions=f"دانش مرتبط از پایگاه شرکت (فقط از همین استفاده کن):\n{preload_ctx}"
+                    )
+                else:
+                    speech_handle = session.generate_reply(user_input=text)
+            else:
+                speech_handle = session.generate_reply(user_input=text)
             await speech_handle
             if speech_handle.exception():
                 job_logger.error("Text chat reply failed: %s", speech_handle.exception())
