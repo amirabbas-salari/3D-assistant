@@ -424,6 +424,12 @@ _SPEED_PROFILES: dict[str, dict] = {
         # Ignore very short noises so 80ms endpointing doesn't misfire on breaths
         "interruption": {"min_duration": 0.6, "false_interruption_timeout": 0.6},
     },
+    # Instant: target <0.7s. Only with good headset — 50ms endpointing.
+    "instant": {
+        "endpointing": {"min_delay": 0.05, "max_delay": 0.8},
+        "preemptive_generation": {"preemptive_tts": True, "max_speech_duration": 40.0},
+        "interruption": {"min_duration": 0.5, "false_interruption_timeout": 0.5},
+    },
 }
 
 
