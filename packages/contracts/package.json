@@ -1,0 +1,7 @@
+{
+  "name": "@3d-assistant/contracts",
+  "version": "1.0.0",
+  "private": true,
+  "type": "module",
+  "description": "Shared types and constants between API and Web"
+}

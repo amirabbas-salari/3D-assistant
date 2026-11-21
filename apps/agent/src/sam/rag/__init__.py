@@ -1,26 +1,2 @@
-"""RAG package — re-exports engine for `sam.rag`."""
+"""RAG package — keep engine exports visible."""
 from .engine import *  # noqa: F401,F403
-from .engine import (  # explicit for linters
-    COLLECTION_NAME,
-    DEFAULT_CHUNK_CHARS,
-    DEFAULT_OVERLAP_CHARS,
-    DEFAULT_TOP_K,
-    BM25_K1,
-    BM25_B,
-    TITLE_BOOST,
-    Chunk,
-    Hit,
-    RagIndex,
-    build_index,
-    chunk_text,
-    describe_config,
-    format_hits,
-    iter_source_files,
-    normalize,
-    rag_config,
-    read_manifest,
-    resolve_path,
-    split_sentences,
-    tokenize,
-    write_manifest,
-)
