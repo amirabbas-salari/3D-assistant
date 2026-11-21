@@ -60,9 +60,16 @@ async def entrypoint(ctx: agents.JobContext) -> None:
         raise RuntimeError("CLOUDFLARE_ACCOUNT_ID and CLOUDFLARE_API_TOKEN are required for Cloudflare Workers AI")
     cloudflare_base_url = f"https://api.cloudflare.com/client/v4/accounts/{cloudflare_account_id}/ai/v1"
 
-    tts_model = os.getenv("LIVEKIT_TTS_MODEL","google/gemini-3.8-flash-lite-tts").strip()
-    tts_voice = os.getenv("LIVEKIT_TTS_VOICE","Charon").strip() or "Charon"
-    tts_language = os.getenv("LIVEKIT_TTS_LANGUAGE","fa").strip() or "fa"
+    livekit_tts_model = os.getenv("LIVEKIT_TTS_MODEL", "google/gemini-3.8-flash-lite-tts").strip()
+    livekit_tts_voice = os.getenv("LIVEKIT_TTS_VOICE", "Charon").strip() or "Charon"
+    tts_language = os.getenv("LIVEKIT_TTS_LANGUAGE", "fa").strip() or "fa"
+    # Effective TTS model/voice for logs — cloudflare uses its own vars
+    cf_tts_model = os.getenv("CLOUDFLARE_TTS_MODEL", "elevenlabs/eleven-v3").strip() or "elevenlabs/eleven-v3"
+    cf_tts_voice = (
+        os.getenv("CLOUDFLARE_TTS_VOICE_ID", "").strip()
+        or os.getenv("ELEVENLABS_VOICE_ID", "").strip()
+        or livekit_tts_voice
+    ) or "JBFqnCBsd6RMkjVDRZzb"
 
     inference_conn_options = APIConnectOptions(
         max_retry=int(os.getenv("LIVEKIT_INFERENCE_MAX_RETRY","6")),
@@ -79,24 +86,45 @@ async def entrypoint(ctx: agents.JobContext) -> None:
     stt_prov = stt_provider()
     tts_prov = tts_provider()
     stt = build_stt(stt_prov, model=stt_model, language=stt_language, conn_options=inference_conn_options, fallback=stt_fallback_models, job_logger=job_logger)
-    tts = build_tts(tts_prov, model=tts_model, voice=tts_voice, language=tts_language, conn_options=inference_conn_options, job_logger=job_logger)
+    tts = build_tts(tts_prov, model=livekit_tts_model, voice=livekit_tts_voice, language=tts_language, conn_options=inference_conn_options, job_logger=job_logger)
 
-    # Human-readable labels for logs/health
+    # Fallback for Cloudflare 402 (insufficient credits) → LiveKit Inference
+    # Set CLOUDFLARE_TTS_FALLBACK=false to disable
+    if tts_prov == "cloudflare" and os.getenv("CLOUDFLARE_TTS_FALLBACK", "true").strip().lower() not in {"0", "false", "no", "off", ""}:
+        try:
+            from livekit.agents.tts import FallbackAdapter
+
+            fallback_tts = build_tts("inference", model=livekit_tts_model, voice=livekit_tts_voice, language=tts_language, conn_options=inference_conn_options, job_logger=job_logger)
+            job_logger.info("Cloudflare TTS fallback enabled: primary=cloudflare/%s → fallback=inference/%s", cf_tts_model, livekit_tts_model)
+            # FallbackAdapter will try primary, then fallback on failure (e.g. 402)
+            tts = FallbackAdapter([tts, fallback_tts])  # type: ignore
+        except Exception as e:
+            job_logger.warning("Could not enable Cloudflare TTS fallback: %s (continuing without fallback)", e)
+
+    # Human-readable labels and effective model/voice for logs
     def _label(p: str) -> str:
         return {"cloudflare": "Cloudflare", "direct": "Direct", "inference": "Inference"}.get(p, p)
+
+    eff_tts_model = cf_tts_model if tts_prov == "cloudflare" else livekit_tts_model
+    eff_tts_voice = cf_tts_voice if tts_prov == "cloudflare" else livekit_tts_voice
+    # Use effective for metrics/logs
+    tts_model = eff_tts_model
+    tts_voice = eff_tts_voice
 
     job_logger.info(
         "Voice pipeline: STT=%s/%s/%s, LLM=%s (max_tokens=%s), TTS=%s/%s voice=%s lang=%s",
         _label(stt_prov),
         stt_model, stt_language, llm_model, llm_max_tokens,
         _label(tts_prov),
-        tts_model, tts_voice, tts_language,
+        eff_tts_model, eff_tts_voice, tts_language,
     )
 
     turn_handling = speed_profile(job_logger)
+    # Use effective model for streaming log
+    streaming_desc = "Cloudflare eleven-v3 (via StreamAdapter)" if tts_prov == "cloudflare" else ("GeminiTTS via SDK StreamAdapter (sentence-level)" if not tts.capabilities.streaming else "native streaming")
     job_logger.info("Streaming: STT=%s (streaming=%s) · LLM=%s streaming · TTS=%s (%s) · turn_handling=%s · FAST_START=%s",
-        stt_model, getattr(stt.capabilities,"streaming","?"), llm_model, tts_model,
-        "GeminiTTS via SDK StreamAdapter (sentence-level)" if not tts.capabilities.streaming else "native streaming",
+        stt_model, getattr(stt.capabilities,"streaming","?"), llm_model, eff_tts_model,
+        streaming_desc,
         json.dumps(turn_handling, ensure_ascii=False) if turn_handling else "SDK defaults", fast_start_enabled)
 
     extra_body = llm_request_body(llm_max_tokens, job_logger)
@@ -141,6 +169,10 @@ async def entrypoint(ctx: agents.JobContext) -> None:
                 job_logger.error("LiveKit Inference still 429 after %d rejections. Run python scripts/check_inference.py", rate_limit_hits["count"])
             else:
                 job_logger.warning("LiveKit Inference 429 on %s (attempt %d, retrying)", event.source, rate_limit_hits["count"])
+            return
+        if status == 402:
+            # Cloudflare unified billing for provider models (elevenlabs)
+            job_logger.error("Cloudflare TTS 402: %s — unified billing credits exhausted. Add credits at AI Gateway dashboard or set TTS_PROVIDER=inference to fallback. (CLOUDFLARE_TTS_FALLBACK=true enables auto fallback)", error)
             return
         job_logger.error("AgentSession %s error: %s", event.source, error)
 
