@@ -445,7 +445,7 @@ python scripts/check_voice_flow.py
 | STT (Deepgram nova-3 یا گیت‌وی) | ✅ جریانی (`capabilities.streaming=True`)، با aligned transcript |
 | LLM (Cloudflare Workers AI) | ✅ جریانی، token به token |
 | TTS با `SPEECH_PROVIDER=inference` | ✅ جریانی |
-| TTS با `SPEECH_PROVIDER=direct` (`GeminiTTS`) | ⚠️ خودش جریانی نیست، ولی SDK **خودکار** آن را در `StreamAdapter` جمله‌به‌جمله می‌پیچد |
+| TTS با `SPEECH_PROVIDER=direct` (`GeminiTTS`) | ✅ SDK خودکار در `StreamAdapter` جمله‌به‌جمله می‌پیچد — بعدِ جمله‌ی اول صدا می‌آید (استریمِ واقعی) |
 
 مورد آخر مهم است: `GeminiTTS` مقدار `capabilities.streaming=False` دارد، ولی `Agent.tts_node` در SDK هر TTS غیرجریانی را در یک `StreamAdapter` با `SentenceTokenizer` می‌پیچد. نتیجه این است که صدا بعد از **اولین جمله** شروع می‌شود، نه بعد از کل پاسخ؛ پس نوبت پشت سر هم قفل نمی‌شود. در لاگ استارت‌آپ هم صریح نوشته می‌شود که کدام حالت فعال است.
 
