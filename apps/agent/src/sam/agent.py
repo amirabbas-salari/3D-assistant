@@ -415,6 +415,15 @@ _SPEED_PROFILES: dict[str, dict] = {
         "endpointing": {"min_delay": 0.12, "max_delay": 1.5},
         "preemptive_generation": {"preemptive_tts": True, "max_speech_duration": 30.0},
     },
+    # Ultra: target <1s e2e. Endpointing 80ms — almost no silence wait.
+    # Preemptive starts LLM+TTS on interim transcript, so when the turn commits
+    # the first sentence is already synthesised. Needs headset/quiet room.
+    "ultra": {
+        "endpointing": {"min_delay": 0.08, "max_delay": 1.0},
+        "preemptive_generation": {"preemptive_tts": True, "max_speech_duration": 40.0},
+        # Ignore very short noises so 80ms endpointing doesn't misfire on breaths
+        "interruption": {"min_duration": 0.6, "false_interruption_timeout": 0.6},
+    },
 }
 
 
@@ -424,10 +433,10 @@ def _speed_profile(job_logger) -> dict:
     Explicit AGENT_* variables win over the profile, so a single knob can be
     tuned without abandoning the profile.
     """
-    profile = os.getenv("AGENT_SPEED_PROFILE", "balanced").strip().lower() or "balanced"
+    profile = os.getenv("AGENT_SPEED_PROFILE", "ultra").strip().lower() or "ultra"
     if profile not in _SPEED_PROFILES:
         job_logger.warning(
-            "Unknown AGENT_SPEED_PROFILE=%r; using 'balanced'. Valid: %s",
+            "Unknown AGENT_SPEED_PROFILE=%r; using 'ultra'. Valid: %s",
             profile, ", ".join(_SPEED_PROFILES),
         )
         profile = "balanced"
@@ -577,11 +586,11 @@ class PersianAssistant(Agent):
         fast_start = _flag("AGENT_FAST_START", True)
         name = _assistant_name()
         instructions = (
-            f"تو {name}، مشاور صوتی فروش و دیجیتال مارکتینگِ شرکت هستی — با صدای مرد، گرم، خودمونیِ مؤدبانه و حرفه‌ای. "
+            f"تو {name}، مشاور صوتی فروش و دیجیتال مارکتینگِ شرکت هستی — صدای مرد، گرم، خیلی خودمونی و طبیعی. مثل یه آدم واقعی حرف بزن، نه ربات. "
             f"نام تو {name} است؛ اگر کسی اسمت را پرسید همین را بگو. "
             "هرگاه درباره‌ی جنسیت یا صدای خودت پرسیدند، بگو صدای مرد داری. "
-            "به فارسیِ عامیانه‌ی مؤدبانه حرف بزن: نه خیلی رسمیِ کتابی، نه خیلی کوچه‌بازاری. مثل یه مشاور حرفه‌ای که رفیقِ مشتریه — از «ببینید، خب، راستش، اتفاقا» استفاده کن، با «شما» خطاب کن، جمله‌ها رو کوتاه، ریتم‌دار و قابل گفتن بگو. "
-            "مأموریت اصلی‌ت جذب مشتری برای شرکته: همه چیز رو مجانی و کامل نده؛ چارچوب و بینش واقعی رو بگو (۷۰٪)، ولی اجرای قدم‌به‌قدم، متن آماده و کمپین کامل رو به همکاری موکول کن. هر جواب باید با یه دعوتِ مشخص به مشاوره/همکاری تموم شه — نه با «امیدوارم مفید بوده باشه». "
+            "خیلی کوتاه و گفتگو-محور حرف بزن: هر جواب فقط ۲ تا ۳ جمله‌ی کوتاه، بعد یه سوال که حرف ادامه پیدا کنه. فارسیِ عامیانه‌ی خودمونی — از «خب ببین، راستش، اتفاقا، آخه، می‌دونی، یه چیزی» استفاده کن؛ گاهی «آخ»، «ای ول»، «دقیقا!» هم بذار تا طبیعی‌تر شی. لحنت مثل چت واتساپ با یه رفیقِ حرفه‌ای باشه، نه مقاله. هرگز لیست بلند یا ۴ پاراگراف نده مگر کاربر بگه «کامل توضیح بده». "
+            "مأموریت: نکته‌ی اصلی رو بگو (۷۰٪)، جزئیات اجرایی رو به همکاری موکول کن. هر جواب با یه سوالِ طبیعی تموم شه — نه دعوتِ خشک. "
             "همیشه به فارسی روان و طبیعی پاسخ بده، مگر اینکه کاربر صریحاً زبان دیگری بخواهد. "
             "اگر کاربر متنی را برای روخوانی، تکرار یا بازگویی می‌فرستد، متن را کامل و بدون خلاصه‌کردن یا حذف در پاسخ بیاور تا TTS آن را بخواند. "
             "در این حالت هرگز نگو امکان پخش یا خواندن صدا را نداری. "
@@ -592,16 +601,10 @@ class PersianAssistant(Agent):
             # must already contain the answer — not a filler like "حتما" / "بذارید چک کنم".
             # Each sentence is its own TTS request; tiny fragments cause audible pauses.
             instructions += (
-                " پاسخ را با یک جمله‌ی کامل شروع کن که خودِ جواب (یا کار اصلی) در آن باشد؛ "
-                "نه یک کلمه‌ی تأیید و نه جمله‌ی تشریفاتی مثل «حتماً» یا «بذارید چک کنم». "
-                "این جمله‌ی اول را حدود پنج تا نه کلمه نگه دار: خیلی کوتاه بماند تا TTS بی‌درنگ شروع شود، "
-                "ولی جواب اصلی را همان‌جا بگو؛ جمله‌ی دوم فقط جزئیات باشد. "
-                "هرگز با عبارت‌های مقدمه‌چینی مثل «بگذار فکر کنم» یا «سوال خوبی است» شروع نکن."
-            )
-            instructions += (
-                " جمله‌ها را نشکن: هر جمله باید یک فکر کامل باشد و دست‌کم حدود شش تا ده کلمه داشته باشد. "
-                "به‌جای چند جمله‌ی خیلی کوتاه و تکه‌تکه، دو یا سه جمله‌ی روان بنویس. "
-                "این برای صدا مهم است: جمله‌های ریز، گفتار را بریده‌بریده و پر از مکث می‌کند."
+                " خیلی کوتاه شروع کن: همون جمله‌ی اول جوابِ اصلی باشه، نه «حتما» یا «سوال خوبیه». "
+                "جمله‌ی اول ۵-۹ کلمه تا TTS سریع بیاد، ولی حتما جواب رو همونجا بگو. "
+                "بعدش فقط ۱-۲ جمله‌ی کوتاهِ دیگه، بعد یه سوال — همین. هرگز مقدمه‌چینی نکن. "
+                "جمله‌ها رو نشکن: هر جمله یه فکر کامل (۶-۱۰ کلمه کافیه)، نه تکه‌تکه. دو سه جمله‌ی روان = صدای طبیعی بدون مکث."
             )
         if knowledge_tool is not None:
             instructions += (
@@ -688,7 +691,7 @@ async def entrypoint(ctx: agents.JobContext) -> None:
         "CLOUDFLARE_LLM_MODEL",
     ).strip()
     try:
-        llm_max_tokens = int(os.getenv("CLOUDFLARE_LLM_MAX_TOKENS", "8192"))
+        llm_max_tokens = int(os.getenv("CLOUDFLARE_LLM_MAX_TOKENS", "400"))
     except ValueError as exc:
         raise RuntimeError("CLOUDFLARE_LLM_MAX_TOKENS must be a positive integer") from exc
     if not 1 <= llm_max_tokens <= 24000:

@@ -314,7 +314,7 @@ uv pip install -r requirements.txt
 1. در LiveKit Cloud یک project بسازید و `LIVEKIT_URL`, `LIVEKIT_API_KEY`, `LIVEKIT_API_SECRET` را در `.env` قرار دهید. LiveKit Inference برای TTS از همین اطلاعات استفاده می‌کند و به Google API key جداگانه نیاز ندارد.
 2. در Spatius Studio یک App بسازید و `SPATIUS_API_KEY`, `SPATIUS_APP_ID` و `SPATIUS_AVATAR_ID` را تنظیم کنید. API key فقط در سرور و Agent می‌ماند. ناحیه به‌صورت خودکار انتخاب می‌شود؛ در صورت نیاز `SPATIUS_REGION` را تنظیم کنید. قالب صدای ورودی پیش‌فرض `pcm_s16le` است تا به DLL بومی Opus وابسته نباشد. اگر `ogg_opus` را انتخاب کردید، نرخ‌های مجاز `8000`, `12000`, `16000`, `24000` و `48000` هرتز هستند و سیستم باید libopus داشته باشد.
 3. مدل و صدای TTS را با `LIVEKIT_TTS_MODEL`, `LIVEKIT_TTS_VOICE` و `LIVEKIT_TTS_LANGUAGE` تنظیم کنید. پیش‌فرض‌ها به‌ترتیب `google/gemini-3.8-flash-lite-tts`, `Charon` و `fa` هستند. `Charon` صدای مرد است؛ صدای قبلی `Kore` زنانه بود. صداهای مرد دیگر Gemini عبارت‌اند از `Orus`, `Fenrir`, `Puck`, `Iapetus`, `Algenib`, `Schedar` و `Achird`. این مدل LiveKit Inference زبان فارسی را پشتیبانی می‌کند.
-4. در Cloudflare مقدار `CLOUDFLARE_ACCOUNT_ID` و توکن دارای مجوز Workers AI را تنظیم کنید. سقف خروجی LLM با `CLOUDFLARE_LLM_MAX_TOKENS` کنترل می‌شود و پیش‌فرض آن `8192` است؛ این مقدار صریحاً برای جلوگیری از سقف پیش‌فرض 256 توکنی Workers AI فرستاده می‌شود. برای روخوانی، Agent باید متن کامل را در پاسخ تولید کند؛ TTS فقط همان پاسخ تولیدشده را می‌خواند.
+4. در Cloudflare مقدار `CLOUDFLARE_ACCOUNT_ID` و توکن دارای مجوز Workers AI را تنظیم کنید. سقف خروجی LLM با `CLOUDFLARE_LLM_MAX_TOKENS` کنترل می‌شود و پیش‌فرض آن `400` است (برای جواب‌های کوتاهِ گفتگویی)؛ این مقدار صریحاً برای جلوگیری از سقف پیش‌فرض 256 توکنی Workers AI فرستاده می‌شود. برای روخوانی، Agent باید متن کامل را در پاسخ تولید کند؛ TTS فقط همان پاسخ تولیدشده را می‌خواند.
 5. Agent با نام `sam-voice-agent` dispatch می‌شود؛ همین نام را با `LIVEKIT_AGENT_NAME` هماهنگ نگه دارید. (این نام داخلی است و به کاربر نمی‌رسد؛ نامی که کاربر می‌شنود `ASSISTANT_NAME` است.)
 
 مدل‌های پیش‌فرض (با `SPEECH_PROVIDER=inference`؛ با `direct` همان مدل‌ها از API مستقیم ارائه‌دهنده می‌آیند):
@@ -378,14 +378,15 @@ Agent به LiveKit وصل می‌شود، STT و TTS را از LiveKit Inference
 اگر سرعت مهم است، لازم نیست تک‌تک متغیرها را دست بزنید. یک متغیر، سه پروفایل:
 
 ```env
-AGENT_SPEED_PROFILE=fast
+AGENT_SPEED_PROFILE=ultra   # هدف <۱ ثانیه؛ با هدست/محیط آرام
 ```
 
 | پروفایل | endpointing | preemptive | چه زمانی |
 | --- | --- | --- | --- |
-| `balanced` (پیش‌فرض) | `0.3` / `2.5` s | LLM + TTS | پیش‌فرض |
-| `fast` | `0.2` / `2.0` s | LLM + TTS | حدود ۱۰۰ تا ۴۰۰ میلی‌ثانیه سریع‌تر در هر نوبت |
+| `ultra` (پیش‌فرضِ جدید — هدف <۱ ثانیه) | `0.08` / `1.0` s | LLM + TTS + interruption tuning | با هدست/محیط آرام؛ کمترین مکث |
 | `fastest` | `0.12` / `1.5` s | LLM + TTS | فقط با هدست؛ با مکث میان جمله پاسخ می‌دهد |
+| `fast` | `0.2` / `2.0` s | LLM + TTS | حدود ۱۰۰ تا ۴۰۰ میلی‌ثانیه سریع‌تر در هر نوبت |
+| `balanced` | `0.3` / `2.5` s | LLM + TTS | محافظه‌کار — برای محیط شلوغ |
 
 preemptive در همه‌ی پروفایل‌ها روشن است، چون هزینه‌ی شنیداری ندارد: مدل روی متن موقت شروع می‌کند و اگر متن تأیید نشد، همان کار دور ریخته می‌شود. سودش این است که صدای جمله‌ی بعد وقتی جمله‌ی قبل تمام می‌شود، از قبل آماده است.
 
