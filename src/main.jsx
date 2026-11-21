@@ -38,6 +38,7 @@ function messageTime() {
 
 // Labels match latency.py so the panel and the agent log describe the same stage.
 const LATENCY_STAGES = [
+  ['response_delay', 'پایان سوال → شروع پاسخ'],
   ['end_of_turn_delay', 'تشخیص پایان نوبت'],
   ['transcription_delay', 'متن نهایی STT'],
   ['llm_node_ttft', 'اولین توکن LLM'],
@@ -702,12 +703,19 @@ function App() {
                     <span>زمان‌بندی آخرین نوبت</span>
                     <strong>{msLabel(latency.last.e2e_ms)}</strong>
                   </div>
+                  {/* Highlighted: time from end of user question to start of assistant answer — user requested */}
+                  {(latency.last.response_delay_ms ?? latency.last.stages?.response_delay) != null && (
+                    <div className="latency-highlight" style={{background:'linear-gradient(135deg,#e8f5e9,#f1f8e9)', border:'1.5px solid #4caf50', borderRadius:'10px', padding:'10px 12px', margin:'8px 0 10px', display:'flex', justifyContent:'space-between', alignItems:'center'}}>
+                      <span style={{fontWeight:700, color:'#2e7d32', fontSize:'13px'}}>⏱ پایان سوال → شروع پاسخ</span>
+                      <strong style={{color:'#1b5e20', fontSize:'18px', letterSpacing:'0.3px'}}>{msLabel(latency.last.response_delay_ms ?? latency.last.stages.response_delay)}</strong>
+                    </div>
+                  )}
                   {LATENCY_STAGES.map(([key, label]) => (
                     latency.last.stages[key] === null || latency.last.stages[key] === undefined ? null : (
-                      <div className="latency-row" key={key}>
-                        <span>{label}</span>
+                      <div className="latency-row" key={key} style={key==='response_delay' ? {background:'#f9fff9', borderRadius:'6px', padding:'2px 6px', border:'1px solid #c8e6c9'} : undefined}>
+                        <span>{label}{key==='response_delay' ? ' ⭐' : ''}</span>
                         <div className="latency-bar">
-                          <i style={{ width: `${Math.min(100, ((latency.last.stages[key] || 0) / Math.max(latency.last.e2e_ms || 1, 1)) * 100)}%` }}/>
+                          <i style={{ width: `${Math.min(100, ((latency.last.stages[key] || 0) / Math.max(latency.last.e2e_ms || latency.last.response_delay_ms || 1, 1)) * 100)}%`, background: key==='response_delay' ? '#4caf50' : undefined }}/>
                         </div>
                         <b>{msLabel(latency.last.stages[key])}</b>
                       </div>

@@ -9,7 +9,8 @@ diagnostics panel instead of being guessed at.
 
 The numbers come from the SDK, not from timestamps we invent:
 
-* ``e2e_latency`` — user stopped speaking → agent audio started.
+* ``e2e_latency`` — user stopped speaking → agent audio started (also exposed as response_delay).
+* ``response_delay`` — پایان سوال کاربر ← شروع پاسخ دستیار (highlighted; equals e2e when available, else sum of stages)
 * ``transcription_delay`` — end of speech → final transcript.
 * ``end_of_turn_delay`` — end of speech → the decision that the turn is over
   (this is the endpointing wait, and the usual hidden cost).
@@ -35,7 +36,9 @@ from dataclasses import dataclass, field
 
 # Stage order matters: it is the order a turn happens in, and the order a
 # bottleneck list is easiest to read in.
+# response_delay is the user-requested highlight: wall time from end-of-question to start-of-answer.
 STAGES: tuple[tuple[str, str], ...] = (
+    ("response_delay", "پایان سوال کاربر ← شروع پاسخ دستیار"),
     ("end_of_turn_delay", "پایان گفتار ← تشخیص پایان نوبت"),
     ("transcription_delay", "پایان گفتار ← متن نهایی STT"),
     ("llm_node_ttft", "درخواست LLM ← اولین توکن"),
@@ -56,6 +59,8 @@ STAGE_LABELS = dict(STAGES)
 # What actually moves each stage. A bottleneck line that names a setting is
 # actionable; one that only names a duration is trivia.
 STAGE_ADVICE: dict[str, str] = {
+    "response_delay":
+        "از پایان سوال تا شروع جواب → همین عدد گلوگاه اصلی تجربه‌ی کاربر است؛ مجموع endpointing + LLM + TTS است. اگر بالاست، اول پروفایل سرعت و سپس مدل LLM را چک کنید",
     "end_of_turn_delay":
         "انتظار سکوت است، نه مدل → AGENT_SPEED_PROFILE=fast (یا AGENT_MIN_ENDPOINTING_DELAY)",
     "transcription_delay":
@@ -205,6 +210,15 @@ class LatencyTracker:
             stages.setdefault(key, None)
         self._pending_user = None
         e2e = stage_ms(metrics or {}, "e2e_latency")
+        # response_delay: user-requested highlight — from end of question to start of answer
+        # Prefer SDK's e2e_latency; fallback to sum of serial stages if e2e missing (e.g. text chat)
+        response_delay = e2e
+        if response_delay is None:
+            serial = [stages.get("end_of_turn_delay"), stages.get("llm_node_ttft"), stages.get("tts_node_ttfb"), stages.get("playback_latency")]
+            vals = [v for v in serial if v is not None]
+            response_delay = sum(vals) if vals else None
+        if response_delay is not None:
+            stages["response_delay"] = response_delay
         sample = TurnSample(
             index=self._turn,
             at=time.time(),
@@ -228,6 +242,14 @@ class LatencyTracker:
 
     def _log_turn(self, sample: TurnSample) -> None:
         stages = sample.stages
+        # New highlighted log: time from end of user question to start of assistant answer
+        if stages.get("response_delay") is not None:
+            self._log.info(
+                "⏱ نوبت #%d پاسخ‌دهی %s ← از پایان سوال کاربر تا شروع پاسخ دستیار (e2e: %s)",
+                sample.index,
+                fmt_ms(stages.get("response_delay")),
+                fmt_ms(sample.e2e_ms),
+            )
         self._log.info(
             "⏱ نوبت #%d | سراسری %s | تشخیص پایان %s · متن %s · LLM %s · TTS %s · پخش %s"
             " | %d نویسه%s",
@@ -339,13 +361,19 @@ class LatencyTracker:
 
     def as_dict(self) -> dict[str, object]:
         """Machine-readable snapshot, published to the browser panel."""
+        # Expose response_delay explicitly for the UI highlight (equals e2e when SDK provides it)
+        last_e2e = self._samples[-1].e2e_ms if self._samples else None
+        last_resp = self._samples[-1].stages.get("response_delay") if self._samples else None
         return {
             "turns": self._turn,
             "averages": {key: round(value, 1) for key, value in self.averages().items()},
+            "response_delay_ms": None if last_resp is None else round(last_resp),
+            "response_delay_avg_ms": round(self.averages().get("response_delay", 0), 1) if self.averages().get("response_delay") else None,
             "last": (
                 {
                     "index": self._samples[-1].index,
                     "e2e_ms": None if self._samples[-1].e2e_ms is None else round(self._samples[-1].e2e_ms),
+                    "response_delay_ms": None if last_resp is None else round(last_resp),
                     "stages": {
                         key: (None if value is None else round(value))
                         for key, value in self._samples[-1].stages.items()
