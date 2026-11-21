@@ -1,0 +1,37 @@
+<!doctype html>
+<html lang="fa" dir="rtl">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>دموی ویجت سام — سایت دیجیتال مارکتینگ شما</title>
+  <link href="https://fonts.googleapis.com/css2?family=Vazirmatn:wght@400;600&display=swap" rel="stylesheet" />
+  <style>
+    *{box-sizing:border-box} body{margin:0;font-family:Vazirmatn,Tahoma,sans-serif;background:#f8f9fa;color:#18212b}
+    .hero{max-width:900px;margin:40px auto;padding:28px;background:#fff;border:1px solid #e2e6ea;border-radius:14px}
+    .hero h1{margin:0 0 10px;font-size:22px} .hero p{color:#5a6b7a;line-height:1.9;font-size:13px}
+    code{background:#eef1f4;padding:2px 6px;border-radius:4px;font-size:12px;direction:ltr;display:inline-block}
+    .steps{margin-top:18px;padding:14px;background:#f3f5f7;border-radius:8px;font-size:12px;line-height:2}
+  </style>
+</head>
+<body>
+  <div class="hero">
+    <h1>این یک سایت نمایشی است</h1>
+    <p>
+      گوشه‌ی پایین (چپ/راست) دکمه‌ی شناور سام را می‌بینید. روی آن کلیک کنید — دستیار صوتی در پاپ‌آپ باز می‌شود.
+      همین یک خط کد به سایت اصلی‌تان اضافه کنید:
+    </p>
+    <p><code>&lt;script src="https://sam.yourdomain.com/widget.js" data-sam-url="https://sam.yourdomain.com" data-sam-color="#244f91" async&gt;&lt;/script&gt;</code></p>
+    <div class="steps">
+      <strong>نکته برای تست لوکال:</strong> اگر دستیار روی <code>http://localhost:3001</code> اجراست، این فایل را با<br/>
+      <code>data-sam-url="http://localhost:3001"</code> باز کنید و با <code>npm run dev</code> بالا باشید.
+    </div>
+  </div>
+
+  <!-- ====== فقط همین یک خط به سایت واقعی اضافه می‌شود ====== -->
+  <script src="./widget.js"
+          data-sam-url="http://localhost:3001"
+          data-sam-position="bottom-right"
+          data-sam-color="#244f91"
+          async></script>
+</body>
+</html>
