@@ -415,6 +415,15 @@ _SPEED_PROFILES: dict[str, dict] = {
         "endpointing": {"min_delay": 0.12, "max_delay": 1.5},
         "preemptive_generation": {"preemptive_tts": True, "max_speech_duration": 30.0},
     },
+    # Ultra: target <1s e2e. Endpointing 80ms — almost no silence wait.
+    # Preemptive starts LLM+TTS on interim transcript, so when the turn commits
+    # the first sentence is already synthesised. Needs headset/quiet room.
+    "ultra": {
+        "endpointing": {"min_delay": 0.08, "max_delay": 1.0},
+        "preemptive_generation": {"preemptive_tts": True, "max_speech_duration": 40.0},
+        # Ignore very short noises so 80ms endpointing doesn't misfire on breaths
+        "interruption": {"min_duration": 0.6, "false_interruption_timeout": 0.6},
+    },
 }
 
 
@@ -424,10 +433,10 @@ def _speed_profile(job_logger) -> dict:
     Explicit AGENT_* variables win over the profile, so a single knob can be
     tuned without abandoning the profile.
     """
-    profile = os.getenv("AGENT_SPEED_PROFILE", "balanced").strip().lower() or "balanced"
+    profile = os.getenv("AGENT_SPEED_PROFILE", "ultra").strip().lower() or "ultra"
     if profile not in _SPEED_PROFILES:
         job_logger.warning(
-            "Unknown AGENT_SPEED_PROFILE=%r; using 'balanced'. Valid: %s",
+            "Unknown AGENT_SPEED_PROFILE=%r; using 'ultra'. Valid: %s",
             profile, ", ".join(_SPEED_PROFILES),
         )
         profile = "balanced"
@@ -682,7 +691,7 @@ async def entrypoint(ctx: agents.JobContext) -> None:
         "CLOUDFLARE_LLM_MODEL",
     ).strip()
     try:
-        llm_max_tokens = int(os.getenv("CLOUDFLARE_LLM_MAX_TOKENS", "8192"))
+        llm_max_tokens = int(os.getenv("CLOUDFLARE_LLM_MAX_TOKENS", "400"))
     except ValueError as exc:
         raise RuntimeError("CLOUDFLARE_LLM_MAX_TOKENS must be a positive integer") from exc
     if not 1 <= llm_max_tokens <= 24000:
