@@ -7,7 +7,7 @@ from livekit.plugins import openai
 from ..config.env import flag
 from ..config.llm import llm_request_body
 from ..config.speed import speed_profile
-from ..speech.providers import speech_provider, validate_speech_config
+from ..speech.providers import speech_provider, stt_provider, tts_provider, validate_speech_config
 from ..speech.stt import build_stt, build_tts
 from ..avatar.provider import avatar_provider
 from ..avatar.manager import start_avatar
@@ -75,15 +75,21 @@ async def entrypoint(ctx: agents.JobContext) -> None:
         max_unrecoverable_errors=int(os.getenv("LIVEKIT_MAX_UNRECOVERABLE_ERRORS","8")),
     )
 
-    provider = speech_provider()
-    stt = build_stt(provider, model=stt_model, language=stt_language, conn_options=inference_conn_options, fallback=stt_fallback_models, job_logger=job_logger)
-    tts = build_tts(provider, model=tts_model, voice=tts_voice, language=tts_language, conn_options=inference_conn_options, job_logger=job_logger)
+    # STT and TTS providers can be set independently; TTS_PROVIDER overrides SPEECH_PROVIDER for TTS
+    stt_prov = stt_provider()
+    tts_prov = tts_provider()
+    stt = build_stt(stt_prov, model=stt_model, language=stt_language, conn_options=inference_conn_options, fallback=stt_fallback_models, job_logger=job_logger)
+    tts = build_tts(tts_prov, model=tts_model, voice=tts_voice, language=tts_language, conn_options=inference_conn_options, job_logger=job_logger)
+
+    # Human-readable labels for logs/health
+    def _label(p: str) -> str:
+        return {"cloudflare": "Cloudflare", "direct": "Direct", "inference": "Inference"}.get(p, p)
 
     job_logger.info(
         "Voice pipeline: STT=%s/%s/%s, LLM=%s (max_tokens=%s), TTS=%s/%s voice=%s lang=%s",
-        "Direct" if provider == "direct" else "Inference",
+        _label(stt_prov),
         stt_model, stt_language, llm_model, llm_max_tokens,
-        "Direct" if provider == "direct" else "Inference",
+        _label(tts_prov),
         tts_model, tts_voice, tts_language,
     )
 
