@@ -21,7 +21,6 @@ except ImportError:
     from latency import LatencyTracker  # type: ignore
 
 logger = logging.getLogger("sam.session.entrypoint")
-server = agents.WorkerOptions(entrypoint=None)  # placeholder, replaced below
 
 async def entrypoint(ctx: agents.JobContext) -> None:
     await ctx.connect()
@@ -220,5 +219,9 @@ async def entrypoint(ctx: agents.JobContext) -> None:
     greeting = f"به فارسی سلام کن و به این خواسته پاسخ بده: {opening_line}" if opening_line else "به فارسی گرم و کوتاه سلام کن و بپرس امروز چطور می‌توانی کمک کنی."
     session.generate_reply(instructions=greeting)
 
-# export server
-server = agents.WorkerOptions(entrypoint=entrypoint, agent_name=os.getenv("LIVEKIT_AGENT_NAME","sam-voice-agent"))
+# export server — SDK expects entrypoint_fnc (LiveKit Agents >=1.0)
+try:
+    server = agents.WorkerOptions(entrypoint_fnc=entrypoint, agent_name=os.getenv("LIVEKIT_AGENT_NAME", "sam-voice-agent"))
+except TypeError:
+    # fallback for very old SDK that used `entrypoint`
+    server = agents.WorkerOptions(entrypoint=entrypoint, agent_name=os.getenv("LIVEKIT_AGENT_NAME", "sam-voice-agent"))  # type: ignore[arg-type]
