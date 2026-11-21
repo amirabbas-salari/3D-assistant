@@ -29,7 +29,7 @@
 │   └── api/                # Express API (LiveKit token + health)
 │       ├── src/index.js
 │       └── package.json    # @3d-assistant/api
-├── knowledge/              # منبع RAG (محصولات، سیاست‌ها)
+├── knowledge/              # منبع RAG (اختیاری، بدون محصول — خالی تحویل می‌شود)
 ├── prompts/                # رفتار فروش (sales_playbook.md)
 ├── scripts/                # ابزار CLI (build_rag_index, check_*)
 ├── pyproject.toml          # تنظیمات lint/type در ریشه
@@ -66,11 +66,12 @@ LiveKit audio → Browser / Avatar
 - **FAST_START**: جمله‌ی اول ۵-۹ کلمه‌ی حاوی جواب → مرز جمله زود می‌رسد → TTS زود شروع می‌شود.
   (`AGENT_FAST_START=true` پیش‌فرض؛ هر جمله ۶-۱۰ کلمه‌ی کامل، نه تکه‌تکه).
 
-## RAG
+## RAG (اختیاری، بدون داده‌ی محصول)
 
-- ذخیره: Chroma (` .rag/chroma`) + embedding هش‌شده‌ی محلی (بدون دانلود مدل)
+- ذخیره: Chroma (`.rag/chroma`) + embedding هش‌شده‌ی محلی (بدون دانلود مدل)
 - رتبه‌بندی: BM25 فارسی (نرمال‌سازی ی/ک، حذف نیم‌فاصله، بوست عنوان)
 - ابزار: `search_knowledge` (top_k=3)؛ جست‌وجو <1ms
+- دستیار **هیچ اطلاعات محصولی** ندارد؛ مهارتش فروش حرفه‌ای + دیجیتال مارکتینگ است. RAG فقط برای اسناد داخلی اختیاری سازمان است.
 
 ## تأخیر و مدل‌ها
 
