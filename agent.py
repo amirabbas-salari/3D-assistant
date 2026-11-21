@@ -1,8 +1,4 @@
-"""Persian LiveKit voice agent — LEGACY SHIM (canonical: apps/agent/src/sam/agent.py)
-
-This file is kept for `python agent.py dev` backward compatibility. New code lives in
-`apps/agent/src/sam/` (see ARCHITECTURE.md). It re-exports the same implementation; no behavior change.
-"""
+"""Persian LiveKit voice agent with a pluggable avatar (D-ID or Spatius) and text fallback."""
 
 import asyncio
 import json
@@ -26,9 +22,38 @@ from livekit.agents import (
 )
 from livekit.plugins import openai
 
-import rag as rag_module
+# --- package-aware imports ---
+import sys as _sys
+def _add_to_path(p: Path):
+    s = str(p)
+    if s not in _sys.path:
+        _sys.path.insert(0, s)
 
-from latency import LatencyTracker
+if __package__ in (None, ""):
+    # apps/agent/src
+    _cand = Path(__file__).resolve().parents[2]
+    _add_to_path(_cand)
+    # repo root (parents may be <4 when run via ROOT/agent.py shim)
+    _parents = Path(__file__).resolve().parents
+    _root_candidate = _parents[4] if len(_parents) > 4 else _parents[-1]
+    _add_to_path(_root_candidate)
+    try:
+        from sam.rag.engine import rag_config as _rag_config  # noqa: F401
+        from sam.rag.engine import RagIndex as _RagIndex  # noqa: F401
+        from sam.rag import engine as rag_module
+        from sam.latency.tracker import LatencyTracker
+    except ImportError:
+        import rag as rag_module  # type: ignore
+        from latency import LatencyTracker  # type: ignore
+else:
+    try:
+        from .rag.engine import rag_config as _rag_config  # noqa: F401
+        from .rag.engine import RagIndex as _RagIndex  # noqa: F401
+        from .rag import engine as rag_module
+        from .latency.tracker import LatencyTracker
+    except ImportError:
+        import rag as rag_module  # type: ignore
+        from latency import LatencyTracker  # type: ignore
 
 # Avatar plugins MUST be imported here, not inside the job: every plugin registers
 # itself on import and Plugin.register_plugin() insists on the main thread. On
@@ -70,11 +95,19 @@ except ImportError as exc:  # pragma: no cover - depends on the installed extras
     google_plugin = None
     _google_import_error = exc
 
-PROJECT_ROOT = Path(__file__).resolve().parent
+_par = Path(__file__).resolve().parents
+PROJECT_ROOT = _par[4] if len(_par) > 4 and _par[3].name == "apps" else _par[3] if len(_par) > 3 and _par[2].name == "apps" else Path(__file__).resolve().parent
+# fallback: walk to find repo root via knowledge/ or .env.example
+if not (PROJECT_ROOT / ".env.example").exists():
+    for _anc in _par:
+        if (_anc / ".env.example").exists():
+            PROJECT_ROOT = _anc
+            break
 
 # Project .env first (works no matter which directory you launch from), then the
 # usual upward search as a fallback. load_dotenv never overrides existing values.
 load_dotenv(PROJECT_ROOT / ".env")
+load_dotenv(PROJECT_ROOT / "apps/agent/.env")
 load_dotenv()
 
 server = agents.AgentServer()
@@ -484,11 +517,9 @@ def _make_knowledge_tool(index, config, job_logger, timings: dict | None = None)
     @llm.function_tool(
         name="search_knowledge",
         description=(
-            "Search the store's knowledge base: products (price, stock, specs, warranty), "
-            "store policies (shipping, returns, payment), and current offers. "
-            "Call this before stating ANY price, stock level, delivery time, warranty term, "
-            "discount or product spec — never answer those from memory. "
-            "Call it again with a different query if the first result does not contain the fact. "
+            "Search the organization's knowledge base (brand guide, FAQ, internal docs). "
+            "Call it when the question is about internal facts that may be in the docs. "
+            "If nothing is found, answer from general sales/marketing expertise and ask for details. "
             "Pass the user's question in Persian, as keywords or a short phrase."
         ),
     )
@@ -500,9 +531,8 @@ def _make_knowledge_tool(index, config, job_logger, timings: dict | None = None)
         if not hits:
             job_logger.info("RAG: no match for %r", query)
             return (
-                "چیزی در پایگاه دانش پیدا نشد. به کاربر بگو که این اطلاعات را در دسترس نداری "
-                "و از خودت عدد نساز. اگر سؤال درباره‌ی محصول بود، پیشنهاد بده کارشناس انسانی "
-                "پاسخ بدهد."
+                "چیزی در پایگاه دانش پیدا نشد. صادقانه بگو پیدا نکردی و با دانش عمومی و تجربه‌ی فروش/مارکتینگ ادامه بده؛ "
+                "عدد یا نقل‌قول نساز و اگر به جزئیات کسب‌وکار نیاز داری، از کاربر بپرس."
             )
         job_logger.info(
             "RAG: %r → %s",
@@ -574,28 +604,16 @@ class PersianAssistant(Agent):
                 "این برای صدا مهم است: جمله‌های ریز، گفتار را بریده‌بریده و پر از مکث می‌کند."
             )
         if knowledge_tool is not None:
-            # The tool only helps if the model knows the answers must come from
-            # it — otherwise it quietly answers from its own priors, which is
-            # exactly the failure mode RAG is meant to prevent.
             instructions += (
-                " درباره‌ی موضوع‌هایی که در پایگاه دانش سازمان هست، همیشه اول ابزار "
-                "search_knowledge را صدا بزن و فقط بر اساس همان نتیجه پاسخ بده. "
-                "اگر چیزی پیدا نشد، بگو در پایگاه دانش پیدا نکردی؛ از خودت نساز. "
-                "پاسخ را با یک جمله‌ی کامل شروع کن که جواب در آن باشد و منبع را طبیعی و کوتاه بگو."
+                " اگر پایگاه دانش سازمان فعال است و سؤال به اسناد داخلی مربوط است، "
+                "اول ابزار search_knowledge را صدا بزن و بر اساس نتیجه پاسخ بده. "
+                "اگر چیزی پیدا نشد، صادقانه بگو و با دانش عمومی ادامه بده — عدد یا نقل‌قول نساز."
             )
         selling = _sales_prompt()
         if selling:
-            # Placed after the base rules so its more specific guidance wins in
-            # practice, and gated on RAG being on: the playbook tells the agent
-            # to look up products, which is only possible with the tool.
             instructions += (
-                "\n\nدستور کار فروش (این را در همه‌ی گفتگوها رعایت کن):\n" + selling
+                "\n\nمهارت‌های فروش و مارکتینگ (در همه‌ی گفتگوها رعایت کن):\n" + selling
             )
-            if knowledge_tool is None:
-                instructions += (
-                    "\n\nنکته: الان به پایگاه دانش دسترسی نداری. پس هیچ قیمت، موجودی یا "
-                    "مشخصات محصولی را از خودت نگو و کاربر را به همکار انسانی وصل کن."
-                )
         super().__init__(instructions=instructions, tools=[knowledge_tool] if knowledge_tool else [])
 
 
