@@ -34,6 +34,10 @@ function ttsColor(idx) {
   const palette = ['#4527a0', '#512da8', '#5e35b1', '#673ab7', '#3f51b5', '#3949ab', '#303f9f', '#283593', '#1a237e', '#004d40', '#00695c'];
   return palette[(idx - 1) % palette.length];
 }
+function sttColor(idx) {
+  const palette = ['#1565c0', '#1976d2', '#1e88e5', '#2196f3', '#0288d1', '#0277bd', '#01579b', '#0d47a1', '#00838f', '#00695c', '#2e7d32'];
+  return palette[(idx - 1) % palette.length];
+}
 
 function computeSpans(last) {
   try {
@@ -44,12 +48,13 @@ function computeSpans(last) {
 
     const hasLLMTokens = Array.isArray(last?.tokens) && last.tokens.length > 0;
     const hasTTSTokens = Array.isArray(last?.tts_tokens) && last.tts_tokens.length > 0;
+    const hasSTTTokens = Array.isArray(last?.stt_tokens) && last.stt_tokens.length > 0;
 
     const spans = [];
-    // فیلتر: اگر توکن‌های مرحله‌ای داریم، TTFT/TTFS تکی را حذف می‌کنیم (جایش ردیف سگمنتی می‌آید)
     const baseOrder = PIPELINE_ORDER.filter(k => {
       if (hasLLMTokens && (k === 'llm_node_ttft' || k === 'llm_node_ttfs')) return false;
       if (hasTTSTokens && k === 'tts_node_ttfb') return false;
+      if (hasSTTTokens && k === 'transcription_delay') return false;
       return true;
     });
 
@@ -72,7 +77,7 @@ function computeSpans(last) {
       spans.push({ key, label: meta.label, short: meta.short, color: meta.color, bg: meta.bg, border: meta.border, start, end, dur, kind: 'stage' });
     }
 
-    // LLM: یک ردیف با تمام توکن‌ها داخلش (سگمنت‌های مرحله‌ای)
+    // LLM: یک ردیف با تمام توکن‌ها
     let llmGroup = null;
     let llmTokenSegments = [];
     if (hasLLMTokens) {
@@ -95,7 +100,6 @@ function computeSpans(last) {
           color: tokenColor(idx),
         });
       }
-      // جمع‌بندی بقیه
       if (toks.length > MAX_TOK) {
         const rest = toks.slice(MAX_TOK);
         const restStartRel = toNum(rest[0].start, 0);
@@ -130,14 +134,14 @@ function computeSpans(last) {
       }
     }
 
-    // TTS: یک ردیف با تمام تکه‌های صدا داخلش
+    // TTS: یک ردیف با تمام تکه‌های صدا
     let ttsGroup = null;
     let ttsSegments = [];
     if (hasTTSTokens) {
       const ttoks = last.tts_tokens;
       for (const t of ttoks) {
         const idx = toNum(t.idx, ttsSegments.length + 1);
-        const absStart = toNum(t.start, 0); // backend قبلاً absolute داده (base + offset)
+        const absStart = toNum(t.start, 0);
         const absEnd = toNum(t.end, absStart);
         const dur = toNum(t.dur, absEnd - absStart);
         ttsSegments.push({
@@ -167,23 +171,64 @@ function computeSpans(last) {
       }
     }
 
-    // ترتیب نهایی: head (endpointing, transcription, RAG) → LLM group → TTS group → playback
+    // STT: یک ردیف با تمام تکه‌های دریافت صدا (interim)
+    let sttGroup = null;
+    let sttSegments = [];
+    if (hasSTTTokens) {
+      const stoks = last.stt_tokens;
+      for (const t of stoks) {
+        const idx = toNum(t.idx, sttSegments.length + 1);
+        const absStart = toNum(t.start, 0);
+        const absEnd = toNum(t.end, absStart);
+        const dur = toNum(t.dur, absEnd - absStart);
+        sttSegments.push({
+          idx,
+          start: absStart,
+          end: absEnd,
+          dur,
+          text: String(t.text || '').slice(0, 24),
+          color: sttColor(idx),
+          final: !!t.final,
+        });
+      }
+      if (sttSegments.length) {
+        const gStart = sttSegments[0].start;
+        const gEnd = sttSegments[sttSegments.length - 1].end;
+        sttGroup = {
+          key: 'stt_group',
+          label: `دریافت صدا (STT) — همه تکه‌ها`,
+          short: `STT×${stoks.length}`,
+          color: '#1565c0',
+          start: gStart,
+          end: gEnd,
+          dur: gEnd - gStart,
+          kind: 'stt_group',
+          segments: sttSegments,
+          totalCount: stoks.length,
+        };
+      }
+    }
+
+    // ترتیب: STT → head (endpointing,RAG) → LLM → TTS → playback
     const ttsPlaybackOld = spans.filter(s => s.key === 'playback_latency');
-    const head = spans.filter(s => s.key !== 'playback_latency');
-    const ordered = [...head];
+    const endpointing = spans.filter(s => s.key === 'end_of_turn_delay');
+    const headMid = spans.filter(s => s.key !== 'playback_latency' && s.key !== 'end_of_turn_delay');
+    const ordered = [];
+    if (sttGroup) ordered.push(sttGroup);
+    ordered.push(...endpointing);
+    ordered.push(...headMid);
     if (llmGroup) ordered.push(llmGroup);
     if (ttsGroup) ordered.push(ttsGroup);
-    // اگر TTS سگمنتی داریم، tts_node_ttfb قدیمی دیگر نیست؛ در غیر این صورت اگر نبود، همان قبلی می‌ماند
     ordered.push(...ttsPlaybackOld);
 
-    const allEnds = [...ordered.map(s => s.end), ...llmTokenSegments.map(s => s.end), ...ttsSegments.map(s => s.end)];
+    const allEnds = [...ordered.map(s => s.end), ...llmTokenSegments.map(s => s.end), ...ttsSegments.map(s => s.end), ...sttSegments.map(s => s.end)];
     const maxFromSpans = allEnds.length ? Math.max(...allEnds) : 0;
     const maxEnd = Math.max(1, maxFromSpans, e2e != null && Number.isFinite(e2e) ? e2e : 0);
 
-    return { stages, e2e, maxEnd, spans: ordered, llmGroup, ttsGroup, hasLLMTokens, hasTTSTokens, llmStart };
+    return { stages, e2e, maxEnd, spans: ordered, llmGroup, ttsGroup, sttGroup, hasLLMTokens, hasTTSTokens, hasSTTTokens, llmStart };
   } catch (e) {
     console.error('[TimelineChart computeSpans]', e);
-    return { stages: {}, e2e: null, maxEnd: 1, spans: [], llmGroup: null, ttsGroup: null, hasLLMTokens: false, hasTTSTokens: false, llmStart: 0 };
+    return { stages: {}, e2e: null, maxEnd: 1, spans: [], llmGroup: null, ttsGroup: null, sttGroup: null, hasLLMTokens: false, hasTTSTokens: false, hasSTTTokens: false, llmStart: 0 };
   }
 }
 
@@ -201,8 +246,8 @@ function SegmentedBar({ group, maxEnd }) {
           <span
             key={seg.idx}
             className="seg"
-            style={{ left: `${clampedLeft}%`, width: `${clampedWidth}%`, background: seg.color }}
-            title={`#${seg.idx} "${seg.text}" — ${msLabel(seg.start)} → ${msLabel(seg.end)} (${msLabel(seg.dur)})`}
+            style={{ left: `${clampedLeft}%`, width: `${clampedWidth}%`, background: seg.color, border: seg.final ? '1px solid #fff' : '1px solid rgba(255,255,255,.6)', boxShadow: seg.final ? '0 0 0 1px rgba(0,0,0,.15)' : undefined }}
+            title={`#${seg.idx} "${seg.text}" — ${msLabel(seg.start)} → ${msLabel(seg.end)} (${msLabel(seg.dur)})${seg.final ? ' ✓ نهایی' : ''}`}
           >
             {widthPct > 6 && seg.text ? <em>{seg.text.slice(0, 8)}</em> : null}
           </span>
@@ -219,21 +264,21 @@ export default function TimelineChart({ latency }) {
         <div className="panel-heading">
           <div>
             <span style={{ width: 28, height: 28, display: 'grid', placeItems: 'center', borderRadius: 8, background: '#eef2f7', color: '#4a6fa5' }}>▦</span>
-            <div><h2>گانت پایپ‌لاین صوت</h2><small>هر ردیف = یک مرحله — LLM و صدا هر کدام یک ردیف با تمام توکن‌ها داخلش</small></div>
+            <div><h2>گانت پایپ‌لاین صوت</h2><small>هر ردیف = یک مرحله — دریافت‌ِصدا، LLM و TTS هر کدام یک ردیف با تمام توکن‌ها داخلش</small></div>
           </div>
           <span className="mode-tag">منتظر اولین نوبت</span>
         </div>
         <div style={{ padding: '22px 16px', textAlign: 'center', color: '#7a8a9a', fontSize: 11, lineHeight: 1.9 }}>
-          هنوز نوبتی ثبت نشده — پس از اولین پیام، <b>یک ردیف برای LLM</b> می‌بینی که همه توکن‌ها داخلش مرحله‌ای هستند (توکن #۱، #۲ …) و <b>یک ردیف برای صدا</b> با همه تکه‌های TTS.
+          هنوز نوبتی ثبت نشده — پس از اولین پیام، <b>یک ردیف برای دریافتِ‌صدا (STT)</b>، <b>یک ردیف برای LLM</b> و <b>یک ردیف برای صدا (TTS)</b> می‌بینی که همه توکن‌ها/تکه‌ها داخل همان ردیف مرحله‌ای هستند.
         </div>
         <style>{ganttCss}</style>
       </section>
     );
   }
 
-  let e2e, maxEnd, spans, llmGroup, ttsGroup, hasLLMTokens, hasTTSTokens, llmStart;
+  let e2e, maxEnd, spans, llmGroup, ttsGroup, sttGroup, hasLLMTokens, hasTTSTokens, hasSTTTokens, llmStart;
   try {
-    ({ e2e, maxEnd, spans, llmGroup, ttsGroup, hasLLMTokens, hasTTSTokens, llmStart } = computeSpans(latency.last));
+    ({ e2e, maxEnd, spans, llmGroup, ttsGroup, sttGroup, hasLLMTokens, hasTTSTokens, hasSTTTokens, llmStart } = computeSpans(latency.last));
   } catch (err) {
     console.error('[TimelineChart]', err);
     return <section className="panel gantt-panel"><div style={{ padding: 12, fontSize: 11, color: '#8a4444' }}>خطا در نمایش گانت</div><style>{ganttCss}</style></section>;
@@ -248,7 +293,7 @@ export default function TimelineChart({ latency }) {
       <div className="panel-heading">
         <div>
           <span style={{ width: 28, height: 28, display: 'grid', placeItems: 'center', borderRadius: 8, background: '#e8f0fe', color: '#2857a5', fontWeight: 800, fontSize: 11 }}>◧</span>
-          <div><h2>گانت پایپ‌لاین — نوبت #{latency.last?.index ?? '—'} {hasLLMTokens ? `· LLM ${llmGroup?.totalCount} توکن در یک ردیف` : ''}{hasTTSTokens ? ` · صدا ${ttsGroup?.totalCount} تکه در یک ردیف` : ''}</h2><small>محور زمان: ۰ = پایان صحبت کاربر → {msLabel(safeMaxEnd)} سراسری</small></div>
+          <div><h2>گانت پایپ‌لاین — نوبت #{latency.last?.index ?? '—'} {hasSTTTokens ? `· دریافت ${sttGroup?.totalCount} تکه` : ''}{hasLLMTokens ? ` · LLM ${llmGroup?.totalCount} توکن` : ''}{hasTTSTokens ? ` · صدا ${ttsGroup?.totalCount} تکه` : ''}</h2><small>محور زمان: ۰ = شروع دریافت صدا → {msLabel(safeMaxEnd)} سراسری</small></div>
         </div>
         <span className="gantt-e2e-badge">{msLabel(e2e ?? safeMaxEnd)} سراسری</span>
       </div>
@@ -261,20 +306,21 @@ export default function TimelineChart({ latency }) {
           })}
           {e2e != null && Number.isFinite(e2e) && <span className="gantt-e2e-line" style={{ left: `${Math.min(100, (e2e / safeMaxEnd) * 100)}%` }} />}
         </div>
-        <div className="gantt-axis-labels"><span>شروع (پایان سوال)</span><span>پایان (شروع پخش)</span></div>
+        <div className="gantt-axis-labels"><span>شروع (شروع دریافت صدا)</span><span>پایان (شروع پخش)</span></div>
       </div>
 
-      {(hasLLMTokens || hasTTSTokens) && (
+      {(hasSTTTokens || hasLLMTokens || hasTTSTokens) && (
         <div style={{ padding: '7px 12px', fontSize: 8.5, color: '#5a6b7a', background: '#faf7ff', borderBottom: '1px solid #ede7f6', display: 'flex', gap: 8, flexWrap: 'wrap' }}>
-          {hasLLMTokens && <span style={{ background: '#ede7f6', border: '1px solid #d1c4e9', padding: '2px 7px', borderRadius: 999, fontWeight: 700 }}>LLM: یک ردیف = همه توکن‌ها (سگمنت #۱ از {msLabel(llmGroup.start)}، #۲ بعدش …)</span>}
-          {hasTTSTokens && <span style={{ background: '#ede7f6', border: '1px solid #b39ddb', padding: '2px 7px', borderRadius: 999, fontWeight: 700 }}>صدا: یک ردیف = همه تکه‌ها (هر سگمنت = یک جمله/تکه TTS)</span>}
+          {hasSTTTokens && <span style={{ background: '#e3f2fd', border: '1px solid #90caf9', padding: '2px 7px', borderRadius: 999, fontWeight: 700 }}>دریافت صدا: یک ردیف = همه تکه‌های STT (هر سگمنت یک interim)</span>}
+          {hasLLMTokens && <span style={{ background: '#ede7f6', border: '1px solid #d1c4e9', padding: '2px 7px', borderRadius: 999, fontWeight: 700 }}>LLM: یک ردیف = همه توکن‌ها (سگمنت #۱ از {msLabel(llmGroup.start)} …)</span>}
+          {hasTTSTokens && <span style={{ background: '#ede7f6', border: '1px solid #b39ddb', padding: '2px 7px', borderRadius: 999, fontWeight: 700 }}>صدا: یک ردیف = همه تکه‌های TTS</span>}
         </div>
       )}
 
       <div className="gantt-rows">
         {spans.length === 0 && <div style={{ padding: '10px 4px', fontSize: 10, color: '#6b7c8d', textAlign: 'center' }}>داده‌ای ثبت نشد.</div>}
         {spans.map(s => {
-          const isGrouped = s.kind === 'llm_group' || s.kind === 'tts_group';
+          const isGrouped = s.kind === 'llm_group' || s.kind === 'tts_group' || s.kind === 'stt_group';
           const leftPct = (s.start / safeMaxEnd) * 100;
           const widthPct = Math.max(1.2, (s.dur / safeMaxEnd) * 100);
           const clampedLeft = Math.max(0, Math.min(100, leftPct));
@@ -306,7 +352,16 @@ export default function TimelineChart({ latency }) {
         })}
       </div>
 
-      {/* جزئیات سگمنت‌ها برای دقت */}
+      {hasSTTTokens && sttGroup && (
+        <div style={{ padding: '8px 12px', background: '#e3f2fd', borderTop: '1px solid #90caf9', fontSize: 8, color: '#0d47a1' }}>
+          <strong style={{ fontSize: 9, color: '#1565c0' }}>جزئیات دریافت صدا — هر سگمنت یک تکه STT:</strong>
+          <div style={{ display: 'flex', flexWrap: 'wrap', gap: 4, marginTop: 6 }}>
+            {sttGroup.segments.map(seg => (
+              <span key={seg.idx} style={{ background: seg.color, color: '#fff', padding: '2px 6px', borderRadius: 4, fontFamily: 'ui-monospace,monospace', fontSize: 8 }} title={`#${seg.idx} ${msLabel(seg.start)}→${msLabel(seg.end)}${seg.final ? ' نهایی' : ''}`}>#{seg.idx} "{String(seg.text).slice(0,12)}" · {msLabel(seg.dur)}{seg.final ? ' ✓' : ''}</span>
+            ))}
+          </div>
+        </div>
+      )}
       {hasLLMTokens && llmGroup && (
         <div style={{ padding: '8px 12px', background: '#fff', borderTop: '1px solid #ede7f6', fontSize: 8, color: '#6a6a8a' }}>
           <strong style={{ fontSize: 9, color: '#4a148c' }}>جزئیات LLM — هر سگمنت یک توکن:</strong>
@@ -332,6 +387,7 @@ export default function TimelineChart({ latency }) {
       <div className="gantt-footer">
         <div className="gantt-summary">
           <span>شروع LLM پس از <b>{msLabel(llmStart)}</b></span><span>·</span><span>{turns} نوبت</span>
+          {hasSTTTokens && <><span>·</span><span><b>{sttGroup.totalCount} تکه دریافت صدا</b> در یک ردیف</span></>}
           {hasLLMTokens && <><span>·</span><span><b>{llmGroup.totalCount} توکن LLM</b> در یک ردیف</span></>}
           {hasTTSTokens && <><span>·</span><span><b>{ttsGroup.totalCount} تکه صدا</b> در یک ردیف</span></>}
         </div>

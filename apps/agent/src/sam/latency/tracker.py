@@ -152,6 +152,7 @@ class TurnSample:
     extra: dict[str, object] = field(default_factory=dict)
     tokens: list[dict] = field(default_factory=list)  # LLM per-token timeline: [{idx,text,start,end,dur}]
     tts_tokens: list[dict] = field(default_factory=list)  # TTS per-chunk timeline: [{idx,text,start,end,dur}]
+    stt_tokens: list[dict] = field(default_factory=list)  # STT interim timeline: [{idx,text,start,end,dur,final}]
 
 
 class LatencyTracker:
@@ -175,6 +176,10 @@ class LatencyTracker:
         self._tts_tokens: list[dict] = []
         self._tts_pending: dict | None = None  # {text, start_ms, start_ts}
         self._turn_start_ts: float | None = None
+        # STT interim (دریافت صدا)
+        self._stt_tokens: list[dict] = []
+        self._stt_last_ts: float | None = None
+        self._stt_last_text: str = ""
 
     # ---- Token-level tracking (برای گانت مرحله‌ای) ----
     def on_llm_start(self) -> None:
@@ -242,6 +247,41 @@ class LatencyTracker:
 
     def on_turn_start(self) -> None:
         self._turn_start_ts = time.time()
+        self._stt_last_ts = self._turn_start_ts
+        self._stt_tokens = []
+        self._stt_last_text = ""
+
+    def on_stt_token(self, text: str, is_final: bool = False) -> None:
+        """هر تکه STT interim/final را به عنوان سگمنت ثبت کن (مرحله‌ای)."""
+        if not text or not text.strip():
+            return
+        now = time.time()
+        if self._turn_start_ts is None:
+            self._turn_start_ts = now
+            self._stt_last_ts = now
+        if self._stt_last_ts is None:
+            self._stt_last_ts = self._turn_start_ts or now
+        assert self._stt_last_ts is not None and self._turn_start_ts is not None
+        # فقط زمانی ثبت کن که متن تغییر کرده باشد یا final باشد
+        clean = text.strip()[:60].replace("\n", " ")
+        if clean == self._stt_last_text and not is_final:
+            return
+        start_ms = (self._stt_last_ts - self._turn_start_ts) * 1000.0
+        end_ms = (now - self._turn_start_ts) * 1000.0
+        dur_ms = end_ms - start_ms
+        self._stt_tokens.append({
+            "idx": len(self._stt_tokens) + 1,
+            "text": clean,
+            "start": round(start_ms, 1),
+            "end": round(end_ms, 1),
+            "dur": round(max(0, dur_ms), 1),
+            "final": bool(is_final),
+        })
+        self._stt_last_ts = now
+        self._stt_last_text = clean
+
+    def on_stt_end(self) -> None:
+        pass
 
     @property
     def turns(self) -> int:
@@ -294,16 +334,19 @@ class LatencyTracker:
             response_delay = sum(vals) if vals else None
         if response_delay is not None:
             stages["response_delay"] = response_delay
-        # attach per-token timelines (LLM و TTS)
+        # attach per-token timelines (STT / LLM / TTS — هر دسته یک ردیف)
         tokens_snapshot = list(self._llm_tokens) if self._llm_tokens else []
         tts_snapshot = list(self._tts_tokens) if self._tts_tokens else []
+        stt_snapshot = list(self._stt_tokens) if self._stt_tokens else []
         # بافرها را برای نوبت بعد خالی کن
         self._llm_tokens = []
         self._tts_tokens = []
+        self._stt_tokens = []
         self._llm_start_ts = None
         self._llm_last_ts = None
         self._tts_pending = None
-        # _turn_start_ts را نگه می‌داریم تا TTS بعدی هم مرجع داشته باشد، در record_turn ریست نمی‌کنیم
+        self._stt_last_ts = None
+        self._stt_last_text = ""
 
         sample = TurnSample(
             index=self._turn,
@@ -319,11 +362,15 @@ class LatencyTracker:
             },
             tokens=tokens_snapshot,
             tts_tokens=tts_snapshot,
+            stt_tokens=stt_snapshot,
         )
         self._samples.append(sample)
 
         if self.enabled:
             self._log_turn(sample)
+            if stt_snapshot:
+                total_stt_ms = stt_snapshot[-1]["end"] if stt_snapshot else 0
+                self._log.info("⏱ نوبت #%d STT تکه‌ها: %d تکه در %s", sample.index, len(stt_snapshot), fmt_ms(total_stt_ms))
             if tokens_snapshot:
                 total_tok_ms = tokens_snapshot[-1]["end"] if tokens_snapshot else 0
                 avg_tok = total_tok_ms / len(tokens_snapshot) if tokens_snapshot else 0
@@ -461,6 +508,7 @@ class LatencyTracker:
         last_resp = self._samples[-1].stages.get("response_delay") if self._samples else None
         last_tokens = getattr(self._samples[-1], "tokens", []) if self._samples else []
         last_tts = getattr(self._samples[-1], "tts_tokens", []) if self._samples else []
+        last_stt = getattr(self._samples[-1], "stt_tokens", []) if self._samples else []
         return {
             "turns": self._turn,
             "averages": {key: round(value, 1) for key, value in self.averages().items()},
@@ -477,6 +525,7 @@ class LatencyTracker:
                     },
                     "tokens": last_tokens,
                     "tts_tokens": last_tts,
+                    "stt_tokens": last_stt,
                     "reply_text": getattr(self._samples[-1], "extra", {}).get("reply_preview", "") if hasattr(self._samples[-1], "extra") else "",
                 }
                 if self._samples
@@ -489,10 +538,16 @@ class LatencyTracker:
         self._turn = 0
         self._llm_tokens = []
         self._tts_tokens = []
+        self._stt_tokens = []
         self._llm_start_ts = None
         self._llm_last_ts = None
         self._tts_pending = None
         self._turn_start_ts = None
+        self._stt_last_ts = None
+        self._stt_last_text = ""
 
     def mark_turn_start(self) -> None:
         self._turn_start_ts = time.time()
+        self._stt_last_ts = self._turn_start_ts
+        self._stt_tokens = []
+        self._stt_last_text = ""

@@ -205,6 +205,19 @@ async def entrypoint(ctx: agents.JobContext) -> None:
     @session.on("user_input_transcribed")
     def on_user_input_transcribed(event) -> None:
         asyncio.create_task(publish_user_transcript(event))
+        try:
+            text = (getattr(event, "transcript", "") or "").strip()
+            is_final = bool(getattr(event, "is_final", False))
+            if text:
+                # اگر نوبت جدید شروع شده، turn_start نداشتیم — اولین interim همان شروع نوبت است
+                if latency._turn_start_ts is None or (latency._stt_last_ts is None and not latency._stt_tokens):
+                    try:
+                        latency.mark_turn_start()
+                    except Exception:
+                        pass
+                latency.on_stt_token(text, is_final=is_final)
+        except Exception:
+            pass
 
     tts_requests = {"turn": 0}
     @session.on("metrics_collected")
