@@ -272,7 +272,7 @@ async def entrypoint(ctx: agents.JobContext) -> None:
             job_logger.exception("Invalid text chat data packet")
     ctx.room.on("data_received", on_room_data_received)
 
-    await session.start(agent=PersianAssistant(knowledge_tool=knowledge_tool), room=ctx.room, room_output_options=RoomOutputOptions(audio_enabled=avatar is None))
+    await session.start(agent=PersianAssistant(knowledge_tool=knowledge_tool, latency_tracker=latency), room=ctx.room, room_output_options=RoomOutputOptions(audio_enabled=avatar is None))
     job_logger.info("Agent session started and ready for voice or text input")
 
     try:

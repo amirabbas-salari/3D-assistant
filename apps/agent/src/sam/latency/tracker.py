@@ -150,6 +150,7 @@ class TurnSample:
     reply_chars: int = 0
     interrupted: bool = False
     extra: dict[str, object] = field(default_factory=dict)
+    tokens: list[dict] = field(default_factory=list)  # per-token timeline: [{idx,text,start,end,dur}]
 
 
 class LatencyTracker:
@@ -166,6 +167,44 @@ class LatencyTracker:
         self._samples: list[TurnSample] = []
         self._turn = 0
         self._pending_user: dict[str, float | None] | None = None
+        # Per-token tracking (مرحله‌ای)
+        self._llm_start_ts: float | None = None
+        self._llm_last_ts: float | None = None
+        self._llm_tokens: list[dict] = []
+
+    # ---- Token-level tracking (برای گانت مرحله‌ای) ----
+    def on_llm_start(self) -> None:
+        self._llm_start_ts = time.time()
+        self._llm_last_ts = self._llm_start_ts
+        self._llm_tokens = []
+
+    def on_llm_token(self, text: str) -> None:
+        if not text:
+            return
+        now = time.time()
+        if self._llm_start_ts is None:
+            self.on_llm_start()
+            # first token starts at 0
+            self._llm_start_ts = now  # fallback, should not happen
+            self._llm_last_ts = now
+        assert self._llm_start_ts is not None and self._llm_last_ts is not None
+        start_ms = (self._llm_last_ts - self._llm_start_ts) * 1000.0
+        end_ms = (now - self._llm_start_ts) * 1000.0
+        dur_ms = end_ms - start_ms
+        # keep small text, limit length
+        safe_text = text[:40].replace("\n", " ")
+        self._llm_tokens.append({
+            "idx": len(self._llm_tokens) + 1,
+            "text": safe_text,
+            "start": round(start_ms, 1),
+            "end": round(end_ms, 1),
+            "dur": round(max(0, dur_ms), 1),
+        })
+        self._llm_last_ts = now
+
+    def on_llm_end(self) -> None:
+        # no-op, tokens kept until record_turn
+        pass
 
     @property
     def turns(self) -> int:
@@ -218,6 +257,13 @@ class LatencyTracker:
             response_delay = sum(vals) if vals else None
         if response_delay is not None:
             stages["response_delay"] = response_delay
+        # attach per-token timeline (اگر داریم)
+        tokens_snapshot = list(self._llm_tokens) if self._llm_tokens else []
+        # بعد از هر نوبت، بافر توکن را خالی کن برای نوبت بعد
+        self._llm_tokens = []
+        self._llm_start_ts = None
+        self._llm_last_ts = None
+
         sample = TurnSample(
             index=self._turn,
             at=time.time(),
@@ -230,11 +276,16 @@ class LatencyTracker:
                 "llm": llm_model,
                 "tts": tts_model,
             },
+            tokens=tokens_snapshot,
         )
         self._samples.append(sample)
 
         if self.enabled:
             self._log_turn(sample)
+            if tokens_snapshot:
+                total_tok_ms = tokens_snapshot[-1]["end"] if tokens_snapshot else 0
+                avg_tok = total_tok_ms / len(tokens_snapshot) if tokens_snapshot else 0
+                self._log.info("⏱ نوبت #%d توکن‌ها: %d توکن در %s (میانگین هر توکن %s)", sample.index, len(tokens_snapshot), fmt_ms(total_tok_ms), fmt_ms(avg_tok))
         if self.report_interval and self._turn % self.report_interval == 0:
             self.summary(prefix="میانگین")
         return sample
@@ -363,6 +414,7 @@ class LatencyTracker:
         # Expose response_delay explicitly for the UI highlight (equals e2e when SDK provides it)
         last_e2e = self._samples[-1].e2e_ms if self._samples else None
         last_resp = self._samples[-1].stages.get("response_delay") if self._samples else None
+        last_tokens = getattr(self._samples[-1], "tokens", []) if self._samples else []
         return {
             "turns": self._turn,
             "averages": {key: round(value, 1) for key, value in self.averages().items()},
@@ -377,6 +429,8 @@ class LatencyTracker:
                         key: (None if value is None else round(value))
                         for key, value in self._samples[-1].stages.items()
                     },
+                    "tokens": last_tokens,
+                    "reply_text": getattr(self._samples[-1], "extra", {}).get("reply_preview", "") if hasattr(self._samples[-1], "extra") else "",
                 }
                 if self._samples
                 else None
@@ -386,3 +440,6 @@ class LatencyTracker:
     def reset(self) -> None:
         self._samples.clear()
         self._turn = 0
+        self._llm_tokens = []
+        self._llm_start_ts = None
+        self._llm_last_ts = None

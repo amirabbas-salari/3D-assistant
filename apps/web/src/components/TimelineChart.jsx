@@ -26,6 +26,12 @@ function toNum(v, fallback = 0) {
   return Number.isFinite(n) ? n : fallback;
 }
 
+// رنگ گرادیانت برای توکن‌های مرحله‌ای
+function tokenColor(idx) {
+  const palette = ['#6a1b9a', '#7b1fa2', '#8e24aa', '#ab47bc', '#ce93d8', '#512da8', '#5e35b1', '#673ab7', '#3949ab', '#283593'];
+  return palette[(idx - 1) % palette.length];
+}
+
 function computeSpans(last) {
   try {
     const stages = last?.stages || {};
@@ -34,14 +40,18 @@ function computeSpans(last) {
     const llmStart = Math.max(toNum(stages.end_of_turn_delay, 0), toNum(stages.transcription_delay, 0));
 
     const spans = [];
-    for (const key of PIPELINE_ORDER) {
+    const hasTokens = Array.isArray(last?.tokens) && last.tokens.length > 0;
+    // اگر توکن‌های مرحله‌ای داریم، TTFT/TTFS تکی را حذف می‌کنیم و به جایش توکن‌ها را نشان می‌دهیم
+    const orderFiltered = hasTokens ? PIPELINE_ORDER.filter(k => k !== 'llm_node_ttft' && k !== 'llm_node_ttfs') : PIPELINE_ORDER;
+
+    for (const key of orderFiltered) {
       const raw = stages[key];
       if (raw == null) continue;
       const dur = toNum(raw, null);
       if (dur == null || !Number.isFinite(dur) || dur < 0) continue;
       let start = 0;
       if (key === 'end_of_turn_delay' || key === 'transcription_delay') start = 0;
-      else if (key === 'knowledge_lookup' || key === 'llm_node_ttft' || key === 'llm_node_ttfs') start = llmStart;
+      else if (key === 'knowledge_lookup') start = llmStart;
       else if (key === 'tts_node_ttfb') start = llmStart + toNum(stages.llm_node_ttfs ?? stages.llm_node_ttft ?? 0, 0);
       else if (key === 'playback_latency') {
         const ttsStart = llmStart + toNum(stages.llm_node_ttfs ?? stages.llm_node_ttft ?? 0, 0);
@@ -50,36 +60,95 @@ function computeSpans(last) {
       if (!Number.isFinite(start)) start = 0;
       const end = start + dur;
       const meta = STAGE_META[key] || { label: key, short: key, color: '#607d8b', bg: '#eceff1', border: '#cfd8dc' };
-      spans.push({ key, label: meta.label, short: meta.short, color: meta.color, bg: meta.bg, border: meta.border, start, end, dur });
+      spans.push({ key, label: meta.label, short: meta.short, color: meta.color, bg: meta.bg, border: meta.border, start, end, dur, kind: 'stage' });
     }
-    const ends = spans.map(s => s.end);
+
+    // توکن‌های مرحله‌ای LLM
+    let tokenSpans = [];
+    if (hasTokens) {
+      const toks = last.tokens;
+      // محدودیت برای جلوگیری از 200 ردیف خیلی سنگین — 60 توکن اول، بقیه جمع‌بندی
+      const MAX_TOK = 60;
+      const sliced = toks.length > MAX_TOK ? toks.slice(0, MAX_TOK) : toks;
+      for (const t of sliced) {
+        const idx = toNum(t.idx, tokenSpans.length + 1);
+        const tStartRel = toNum(t.start, 0);
+        const tEndRel = toNum(t.end, 0);
+        const tDur = toNum(t.dur, tEndRel - tStartRel);
+        const absStart = llmStart + tStartRel;
+        const absEnd = llmStart + tEndRel;
+        const txt = String(t.text || '').slice(0, 30);
+        tokenSpans.push({
+          key: `tok_${idx}`,
+          label: `توکن #${idx}`,
+          short: `#${idx}`,
+          color: tokenColor(idx),
+          bg: '#f3e5f5',
+          border: '#ce93d8',
+          start: absStart,
+          end: absEnd,
+          dur: tDur,
+          kind: 'token',
+          text: txt,
+        });
+      }
+      // اگر بیشتر از MAX_TOK بود، یک ردیف جمع‌بندی اضافه کن
+      if (toks.length > MAX_TOK) {
+        const rest = toks.slice(MAX_TOK);
+        const restStartRel = toNum(rest[0].start, 0);
+        const restEndRel = toNum(rest[rest.length - 1].end, 0);
+        tokenSpans.push({
+          key: 'tok_rest',
+          label: `+${rest.length} توکن دیگر`,
+          short: `+${rest.length}`,
+          color: '#78909c',
+          bg: '#eceff1',
+          border: '#b0bec5',
+          start: llmStart + restStartRel,
+          end: llmStart + restEndRel,
+          dur: toNum(rest.reduce((s, x) => s + toNum(x.dur, 0), 0), 0),
+          kind: 'token_rest',
+          text: rest.map(r => r.text).join('').slice(0, 40) + '…',
+        });
+      }
+    }
+
+    const allSpans = [...spans, ...tokenSpans]; // برای maxEnd
+    // برای رندر: اول stageهای قبل از LLM، بعد توکن‌ها، بعد TTS/playback
+    // spans الان شامل endpointing/transcription/RAG + TTS/playback است، tokenSpans جداست
+    // ترتیب نهایی: endpointing, transcription, RAG, [tokens], TTS, playback
+    const ttsPlayback = spans.filter(s => s.key === 'tts_node_ttfb' || s.key === 'playback_latency');
+    const head = spans.filter(s => !ttsPlayback.includes(s));
+    const orderedSpans = hasTokens ? [...head, ...tokenSpans, ...ttsPlayback] : spans;
+
+    const ends = allSpans.map(s => s.end);
     const maxFromSpans = ends.length ? Math.max(...ends) : 0;
     const maxEnd = Math.max(1, maxFromSpans, e2e != null && Number.isFinite(e2e) ? e2e : 0);
-    return { stages, e2e, maxEnd, spans, llmStart };
+    return { stages, e2e, maxEnd, spans: orderedSpans, tokenSpans, hasTokens, llmStart };
   } catch (e) {
     console.error('[TimelineChart computeSpans]', e);
-    return { stages: {}, e2e: null, maxEnd: 1, spans: [], llmStart: 0 };
+    return { stages: {}, e2e: null, maxEnd: 1, spans: [], tokenSpans: [], hasTokens: false, llmStart: 0 };
   }
 }
 
 export default function TimelineChart({ latency }) {
-  // هیچ latency هنوز نیامده → کارت خالی ولی بدون کرش
   if (!latency?.last) {
     return (
       <section className="panel gantt-panel gantt-empty">
         <div className="panel-heading">
           <div>
             <span style={{ width: 28, height: 28, display: 'grid', placeItems: 'center', borderRadius: 8, background: '#eef2f7', color: '#4a6fa5' }}>▦</span>
-            <div><h2>گانت پایپ‌لاین صوت</h2><small>از پایان سوال تا شروع پاسخ — بازه‌ی هر مرحله</small></div>
+            <div><h2>گانت پایپ‌لاین صوت</h2><small>از پایان سوال تا شروع پاسخ — بازه‌ی هر مرحله (توکن‌های LLM مرحله‌ای)</small></div>
           </div>
           <span className="mode-tag">منتظر اولین نوبت</span>
         </div>
         <div style={{ padding: '22px 16px', textAlign: 'center', color: '#7a8a9a', fontSize: 11, lineHeight: 1.9 }}>
-          هنوز نوبتی ثبت نشده — پس از اولین پیام (صوتی یا متنی) اینجا هر مرحله را با بازه‌ی <b>«از X تا Y»</b> می‌بینی.
+          هنوز نوبتی ثبت نشده — پس از اولین پیام، اینجا هر <b>توکن LLM</b> را جدا می‌بینی: توکن #۱ از X تا Y، توکن #۲ از Y تا Z…
           <div style={{ marginTop: 10, display: 'flex', gap: 6, justifyContent: 'center', flexWrap: 'wrap' }}>
             {Object.values(STAGE_META).slice(0, 4).map(m => (
               <span key={m.short} style={{ background: m.bg, border: `1px solid ${m.border}`, color: m.color, padding: '2px 7px', borderRadius: 999, fontSize: 9, fontWeight: 700 }}>{m.short}</span>
             ))}
+            <span style={{ background: '#f3e5f5', border: '1px solid #ce93d8', color: '#6a1b9a', padding: '2px 7px', borderRadius: 999, fontSize: 9, fontWeight: 700 }}>توکن #1…</span>
           </div>
         </div>
         <style>{ganttCss}</style>
@@ -87,9 +156,9 @@ export default function TimelineChart({ latency }) {
     );
   }
 
-  let e2e, maxEnd, spans, llmStart;
+  let e2e, maxEnd, spans, tokenSpans, hasTokens, llmStart;
   try {
-    ({ e2e, maxEnd, spans, llmStart } = computeSpans(latency.last));
+    ({ e2e, maxEnd, spans, tokenSpans, hasTokens, llmStart } = computeSpans(latency.last));
   } catch (err) {
     console.error('[TimelineChart]', err);
     return (
@@ -109,7 +178,7 @@ export default function TimelineChart({ latency }) {
       <div className="panel-heading">
         <div>
           <span style={{ width: 28, height: 28, display: 'grid', placeItems: 'center', borderRadius: 8, background: '#e8f0fe', color: '#2857a5', fontWeight: 800, fontSize: 11 }}>◧</span>
-          <div><h2>گانت پایپ‌لاین — نوبت #{latency.last?.index ?? '—'}</h2><small>محور زمان: ۰ = پایان صحبت کاربر → {msLabel(safeMaxEnd)} سراسری</small></div>
+          <div><h2>گانت پایپ‌لاین — نوبت #{latency.last?.index ?? '—'} {hasTokens ? `· ${tokenSpans.length} توکن مرحله‌ای` : ''}</h2><small>محور زمان: ۰ = پایان صحبت کاربر → {msLabel(safeMaxEnd)} سراسری</small></div>
         </div>
         <span className="gantt-e2e-badge" title={`e2e ${msLabel(e2e)} · max end ${msLabel(safeMaxEnd)}`}>{msLabel(e2e ?? safeMaxEnd)} سراسری</span>
       </div>
@@ -133,23 +202,30 @@ export default function TimelineChart({ latency }) {
         </div>
       </div>
 
+      {hasTokens && (
+        <div style={{ padding: '8px 12px 0', fontSize: 9, color: '#5e35b1', background: '#faf7ff', borderBottom: '1px solid #ede7f6', display: 'flex', gap: 6, flexWrap: 'wrap', alignItems: 'center' }}>
+          <span style={{ background: '#ede7f6', border: '1px solid #d1c4e9', padding: '2px 7px', borderRadius: 999, fontWeight: 700 }}>نمای مرحله‌ای توکن‌ها</span>
+          <span>هر ردیف = یک توکن LLM (توکن #۱ از {msLabel(llmStart)} تا {msLabel(llmStart + (tokenSpans[0]?.dur || 0))}، بعد #۲ و …) — به جای «اولین توکن/اولین جمله»ی قبلی</span>
+        </div>
+      )}
+
       <div className="gantt-rows">
         {spans.length === 0 && <div style={{ padding: '10px 4px', fontSize: 10, color: '#6b7c8d', textAlign: 'center' }}>دادهٔ مرحله‌ای برای این نوبت ثبت نشد.</div>}
         {spans.map(s => {
           const leftPct = Number.isFinite(s.start) && Number.isFinite(safeMaxEnd) ? (s.start / safeMaxEnd) * 100 : 0;
           const widthPct = Number.isFinite(s.dur) && Number.isFinite(safeMaxEnd) ? Math.max(1.2, (s.dur / safeMaxEnd) * 100) : 1.2;
           const pctOfTotal = safeMaxEnd ? ((s.dur / safeMaxEnd) * 100).toFixed(1) : '0';
-          const isNarrow = widthPct < 12;
-          // clamp تا بیرون نزند
+          const isNarrow = widthPct < 10;
           const clampedLeft = Math.max(0, Math.min(100, leftPct));
           const clampedWidth = Math.max(1.2, Math.min(100 - clampedLeft, widthPct));
+          const isToken = s.kind === 'token' || s.kind === 'token_rest';
           return (
-            <div key={s.key} className="gantt-row">
+            <div key={s.key} className={`gantt-row ${isToken ? 'gantt-row-token' : ''}`}>
               <div className="gantt-label">
                 <i style={{ background: s.color }} />
                 <div>
-                  <strong>{s.label}</strong>
-                  <small>{s.short}</small>
+                  <strong>{s.label} {isToken && s.text ? `· "${s.text}"` : ''}</strong>
+                  <small>{s.short} {isToken ? `· ${msLabel(s.dur)}` : ''}</small>
                 </div>
               </div>
               <div className="gantt-track">
@@ -159,11 +235,11 @@ export default function TimelineChart({ latency }) {
                 <div
                   className="gantt-bar"
                   style={{ left: `${clampedLeft}%`, width: `${clampedWidth}%`, background: s.color, borderColor: s.border, boxShadow: `0 1px 6px ${s.color}33` }}
-                  title={`${s.label}: ${msLabel(s.start)} → ${msLabel(s.end)} (طول ${msLabel(s.dur)} · ${pctOfTotal}% کل)`}
+                  title={`${s.label}${s.text ? ` "${s.text}"` : ''}: ${msLabel(s.start)} → ${msLabel(s.end)} (طول ${msLabel(s.dur)} · ${pctOfTotal}% کل)`}
                 >
-                  {!isNarrow && <span className="gantt-bar-text">{msLabel(s.dur)}</span>}
+                  {!isNarrow && <span className="gantt-bar-text">{isToken ? s.text || msLabel(s.dur) : msLabel(s.dur)}</span>}
                 </div>
-                {isNarrow && <span className="gantt-bar-outside" style={{ left: `calc(${clampedLeft + clampedWidth}% + 6px)`, color: s.color }}>{msLabel(s.dur)}</span>}
+                {isNarrow && <span className="gantt-bar-outside" style={{ left: `calc(${clampedLeft + clampedWidth}% + 6px)`, color: s.color }}>{isToken ? (s.text || msLabel(s.dur)) : msLabel(s.dur)}</span>}
                 <span className="gantt-range-hint">{msLabel(s.start)} → {msLabel(s.end)}</span>
               </div>
               <div className="gantt-time">
@@ -180,6 +256,7 @@ export default function TimelineChart({ latency }) {
           <span>شروع LLM پس از <b>{msLabel(llmStart)}</b> (max تشخیص/STT)</span>
           <span>·</span>
           <span>{turns} نوبت ثبت‌شده</span>
+          {hasTokens && <><span>·</span><span><b>{tokenSpans.length} توکن</b> مرحله‌ای (هر توکن یک ردیف)</span></>}
           {latency.averages && Object.keys(latency.averages).length > 0 && (
             <>
               <span>·</span>
@@ -193,9 +270,18 @@ export default function TimelineChart({ latency }) {
           )}
         </div>
         <div className="gantt-legend">
-          {spans.map(s => (
-            <span key={s.key} className="gantt-legend-item"><i style={{ background: s.color }} />{s.short}</span>
-          ))}
+          {hasTokens ? (
+            <>
+              <span className="gantt-legend-item"><i style={{ background: '#6a1b9a' }} />توکن‌ها مرحله‌ای</span>
+              {spans.filter(s => s.kind !== 'token' && s.kind !== 'token_rest').slice(0,4).map(s => (
+                <span key={s.key} className="gantt-legend-item"><i style={{ background: s.color }} />{s.short}</span>
+              ))}
+            </>
+          ) : (
+            spans.map(s => (
+              <span key={s.key} className="gantt-legend-item"><i style={{ background: s.color }} />{s.short}</span>
+            ))
+          )}
         </div>
       </div>
 
@@ -217,8 +303,9 @@ const ganttCss = `
 .gantt-e2e-line{ position:absolute; top:0; bottom:0; width:2px; background:#2e7d32; opacity:.9; transform:translateX(-50%) }
 .gantt-e2e-line::after{ content:'e2e'; position:absolute; top:-1px; right:4px; font-size:7px; font-weight:800; color:#2e7d32; background:#e8f5e9; padding:0 3px; border-radius:3px; border:1px solid #aed581 }
 .gantt-axis-labels{ display:flex; justify-content:space-between; font-size:8px; color:#8a99a8; margin-top:4px; letter-spacing:.02em }
-.gantt-rows{ padding:10px 12px; display:grid; gap:8px; background:#fff }
+.gantt-rows{ padding:10px 12px; display:grid; gap:6px; background:#fff; max-height:520px; overflow-y:auto; scrollbar-width:thin; scrollbar-color:#c4ced8 transparent }
 .gantt-row{ display:grid; grid-template-columns:138px minmax(0,1fr) 110px; gap:8px; align-items:center; }
+.gantt-row-token{ background:#faf7ff; border:1px solid #ede7f6; border-radius:6px; padding:2px 4px; margin:0 -4px }
 .gantt-label{ display:flex; align-items:center; gap:7px; min-width:0 }
 .gantt-label i{ width:10px; height:10px; border-radius:3px; flex:none; box-shadow:0 1px 3px #0002 }
 .gantt-label strong{ display:block; font-size:10px; color:#1e2d3a; line-height:1.2; white-space:nowrap; overflow:hidden; text-overflow:ellipsis }
@@ -227,7 +314,7 @@ const ganttCss = `
 .gantt-grid{ position:absolute; inset:0; pointer-events:none }
 .gantt-grid span{ position:absolute; top:0; bottom:0; width:1px; background:#ecf0f4 }
 .gantt-bar{ position:absolute; top:4px; bottom:4px; border-radius:6px; border:1px solid transparent; display:flex; align-items:center; justify-content:center; min-width:6px; transition:width .35s ease, left .35s ease }
-.gantt-bar-text{ color:#fff; font-size:9px; font-weight:800; font-family:ui-monospace,monospace; text-shadow:0 1px 2px rgba(0,0,0,.35); white-space:nowrap; padding:0 4px }
+.gantt-bar-text{ color:#fff; font-size:9px; font-weight:800; font-family:ui-monospace,monospace; text-shadow:0 1px 2px rgba(0,0,0,.35); white-space:nowrap; padding:0 4px; overflow:hidden; text-overflow:ellipsis; max-width:100% }
 .gantt-bar-outside{ position:absolute; top:50%; transform:translateY(-50%); font-size:9px; font-weight:800; font-family:ui-monospace,monospace; white-space:nowrap; background:#fff; padding:1px 4px; border-radius:4px; border:1px solid #e3e8ee }
 .gantt-range-hint{ position:absolute; bottom:1px; right:6px; font-size:7px; color:#9aaaba; font-family:ui-monospace,monospace; background:#ffffffe0; padding:0 3px; border-radius:3px; pointer-events:none }
 .gantt-time{ text-align:left; direction:ltr; display:flex; flex-direction:column; align-items:flex-end; gap:1px; min-width:0 }
