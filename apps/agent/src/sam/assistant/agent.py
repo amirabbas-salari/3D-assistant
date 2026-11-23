@@ -3,7 +3,9 @@ from livekit.agents import Agent, llm
 from .prompt import assistant_name, sales_prompt
 from ..config.env import flag
 class PersianAssistant(Agent):
-    def __init__(self, knowledge_tool=None) -> None:
+    def __init__(self, knowledge_tool=None, latency_tracker=None) -> None:
+        # latency_tracker برای ثبت مرحله‌ای هر توکن (گانت چارت)
+        self._latency_tracker = latency_tracker
         fast_start = flag("AGENT_FAST_START", True)
         name = assistant_name()
         instructions = (
@@ -37,3 +39,30 @@ class PersianAssistant(Agent):
         if selling:
             instructions += "\n\nمهارت‌های فروش و مارکتینگ (در همه‌ی گفتگوها رعایت کن):\n" + selling
         super().__init__(instructions=instructions, tools=[knowledge_tool] if (knowledge_tool and use_tool) else [])
+
+    async def llm_node(self, chat_ctx, tools, model_settings=None):
+        """حلقه LLM با ثبت مرحله‌ای هر توکن برای گانت چارت"""
+        tracker = self._latency_tracker
+        if tracker is not None:
+            try:
+                tracker.on_llm_start()
+            except Exception:
+                pass
+        # فراخوانی پیاده‌سازی پیش‌فرض Agent
+        stream = super().llm_node(chat_ctx, tools, model_settings)
+        async for chunk in stream:
+            if tracker is not None:
+                try:
+                    # chunk.delta.content حاوی تکه‌ای از توکن است
+                    delta = getattr(chunk, "delta", None)
+                    text = getattr(delta, "content", None) if delta else None
+                    if text:
+                        tracker.on_llm_token(text)
+                except Exception:
+                    pass
+            yield chunk
+        if tracker is not None:
+            try:
+                tracker.on_llm_end()
+            except Exception:
+                pass
