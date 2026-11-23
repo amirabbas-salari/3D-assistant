@@ -5,6 +5,7 @@ import VideoPanel from '../components/VideoPanel.jsx';
 import StatusPanel from '../components/StatusPanel.jsx';
 import LogsPanel from '../components/LogsPanel.jsx';
 import TimelineChart from '../components/TimelineChart.jsx';
+import ErrorBoundary from '../components/ErrorBoundary.jsx';
 import RemoteAudioOutput from '../components/RemoteAudioOutput.jsx';
 import { useAppState } from '../hooks/useAppState.js';
 import { fetchHealth, createSession, cleanupSessions } from '../api/client.js';
@@ -172,13 +173,19 @@ export default function App() {
         </section>
         <section className="workspace-grid">
           <div className="left-column">
-            <ChatPanel chatMessages={s.chatMessages} draftTranscript={s.draftTranscript} draft={s.draft} setDraft={s.setDraft} connected={connected} sendText={sendText} chatRef={s.chatRef} />
-            <TimelineChart latency={s.latency} />
+            <ErrorBoundary>
+              <ChatPanel chatMessages={s.chatMessages} draftTranscript={s.draftTranscript} draft={s.draft} setDraft={s.setDraft} connected={connected} sendText={sendText} chatRef={s.chatRef} />
+            </ErrorBoundary>
+            <ErrorBoundary>
+              <TimelineChart latency={s.latency} />
+            </ErrorBoundary>
           </div>
           <aside className="right-column">
             <div className="audio-output" aria-hidden="true">{s.assistantAudioTracks.map((track) => <RemoteAudioOutput key={track.sid} track={track} registry={s.assistantAudioRefs} onRegistered={(els) => s.lipSyncRef.current?.setAudioElements(els)} />)}</div>
             <VideoPanel avatarEnabled={avatarEnabled} avatarProvider={avatarProvider} avatarReady={s.avatarReady} connected={connected} avatarVideoRef={s.avatarVideoRef} avatarContainerRef={s.avatarContainerRef} assistantAudioTracks={s.assistantAudioTracks} audioNeedsGesture={s.audioNeedsGesture} enableAudioPlayback={enableAudioPlayback} lipSyncOffset={s.lipSyncOffset} setLipSyncOffset={s.setLipSyncOffset} />
-            <StatusPanel health={s.health} latency={s.latency} connected={connected} />
+            <ErrorBoundary>
+              <StatusPanel health={s.health} latency={s.latency} connected={connected} />
+            </ErrorBoundary>
             {s.audioNeedsGesture && !avatarEnabled && <button className="secondary-button" onClick={closeStaleSessions} disabled={s.cleanupBusy}><RefreshCw size={14} /> {s.cleanupBusy ? 'در حال بستن…' : 'بستن نشست‌های باز قبلی'}</button>}
           </aside>
         </section>

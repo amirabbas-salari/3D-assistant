@@ -12,16 +12,22 @@ export const LATENCY_STAGES = [
 
 export function msLabel(value) {
   if (value === null || value === undefined) return '—';
-  if (value >= 1000) return `${(value / 1000).toFixed(2)}s`;
-  if (value >= 100) return `${Math.round(value)}ms`;
-  return `${value.toFixed(1)}ms`;
+  const n = Number(value);
+  if (!Number.isFinite(n)) return '—';
+  if (n >= 1000) return `${(n / 1000).toFixed(2)}s`;
+  if (n >= 100) return `${Math.round(n)}ms`;
+  return `${n.toFixed(1)}ms`;
 }
 
 export function formatLatency(packet) {
-  const stages = (packet.last && packet.last.stages) || {};
-  const parts = LATENCY_STAGES
-    .filter(([key]) => stages[key] !== null && stages[key] !== undefined)
-    .map(([key, label]) => `${label}: ${msLabel(stages[key])}`);
-  const e2e = packet.last ? `سراسری ${msLabel(packet.last.e2e_ms)}` : '';
-  return [e2e, ...parts].filter(Boolean).join(' · ');
+  try {
+    const stages = (packet?.last && packet.last.stages) || {};
+    const parts = LATENCY_STAGES
+      .filter(([key]) => stages[key] !== null && stages[key] !== undefined)
+      .map(([key, label]) => `${label}: ${msLabel(stages[key])}`);
+    const e2e = packet?.last ? `سراسری ${msLabel(packet.last.e2e_ms)}` : '';
+    return [e2e, ...parts].filter(Boolean).join(' · ');
+  } catch {
+    return '—';
+  }
 }
