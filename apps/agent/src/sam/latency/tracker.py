@@ -547,6 +547,11 @@ class LatencyTracker:
         self._stt_last_text = ""
 
     def mark_turn_start(self) -> None:
+        # اگر همین الان STT در حال جمع‌آوری است، پاک نکن (گانت خالی می‌شود)
+        if self._stt_tokens:
+            # فقط اگر بیش از 30 ثانیه از شروع گذشته، نوبت جدید حساب کن
+            if self._turn_start_ts is not None and (time.time() - self._turn_start_ts) < 60:
+                return
         self._turn_start_ts = time.time()
         self._stt_last_ts = self._turn_start_ts
         self._stt_tokens = []
