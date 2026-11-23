@@ -119,6 +119,61 @@ async def entrypoint(ctx: agents.JobContext) -> None:
         eff_tts_model, eff_tts_voice, tts_language,
     )
 
+    # Wrap TTS for per-chunk tracking (هر تکه صدا = یک سگمنت در یک ردیف)
+    try:
+        from livekit.agents import tts as tts_api
+        from livekit.agents.types import DEFAULT_API_CONNECT_OPTIONS
+
+        class TrackedTTS(tts_api.TTS):
+            def __init__(self, inner, tracker, logger):
+                super().__init__(capabilities=inner.capabilities, sample_rate=inner.sample_rate, num_channels=inner.num_channels)
+                self._inner = inner
+                self._tracker = tracker
+                self._log = logger
+
+            def synthesize(self, text: str, *, conn_options=DEFAULT_API_CONNECT_OPTIONS):
+                try:
+                    self._tracker.on_tts_start(text)
+                except Exception:
+                    pass
+                stream = self._inner.synthesize(text, conn_options=conn_options)
+                # wrap _run to capture end
+                orig_run = getattr(stream, "_run", None)
+                if callable(orig_run):
+                    async def wrapped_run(output_emitter):
+                        try:
+                            return await orig_run(output_emitter)
+                        finally:
+                            try:
+                                self._tracker.on_tts_end(text)
+                            except Exception:
+                                pass
+                    stream._run = wrapped_run  # type: ignore
+                else:
+                    # fallback for streaming TTS with different API
+                    orig_aclose = getattr(stream, "aclose", None)
+                    if callable(orig_aclose):
+                        orig = orig_aclose
+                        async def wrapped_close(*a, **kw):
+                            try:
+                                return await orig(*a, **kw)
+                            finally:
+                                try:
+                                    self._tracker.on_tts_end(text)
+                                except Exception:
+                                    pass
+                        stream.aclose = wrapped_close  # type: ignore
+                return stream
+
+            # proxy other attrs
+            def __getattr__(self, name):
+                return getattr(self._inner, name)
+
+        tts = TrackedTTS(tts, latency, job_logger)
+        job_logger.info("TTS tracking enabled: هر تکه صدا به صورت سگمنت در گانت ثبت می‌شود")
+    except Exception as e:
+        job_logger.warning("TTS tracking wrap failed: %s", e)
+
     turn_handling = speed_profile(job_logger)
     # Use effective model for streaming log
     streaming_desc = "Cloudflare eleven-v3 (via StreamAdapter)" if tts_prov == "cloudflare" else ("GeminiTTS via SDK StreamAdapter (sentence-level)" if not tts.capabilities.streaming else "native streaming")
@@ -211,7 +266,11 @@ async def entrypoint(ctx: agents.JobContext) -> None:
                             except Exception as e:
                                 job_logger.warning("RAG chat_ctx inject failed: %s", e)
                     except Exception as e:
-                        job_logger.warning("RAG voice preload failed: %s", e)
+                                job_logger.warning("RAG voice preload failed: %s", e)
+            try:
+                latency.mark_turn_start()
+            except Exception:
+                pass
             latency.note_user_turn(getattr(item,"metrics",None))
         elif role == "assistant":
             text = (getattr(item,"text_content","") or "").strip()
@@ -231,6 +290,10 @@ async def entrypoint(ctx: agents.JobContext) -> None:
 
     async def respond_to_text(text: str, sender: str) -> None:
         job_logger.info("Text chat input from %s (%d chars)", sender, len(text))
+        try:
+            latency.mark_turn_start()
+        except Exception:
+            pass
         try:
             session.interrupt()
             # اگر ابزار خاموش است (حالت امن Cloudflare) حتی با RAG_PRELOAD=false هم preload کن
