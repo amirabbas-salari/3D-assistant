@@ -63,11 +63,21 @@ async def entrypoint(ctx: agents.JobContext) -> None:
     livekit_tts_model = os.getenv("LIVEKIT_TTS_MODEL", "google/gemini-3.8-flash-lite-tts").strip()
     livekit_tts_voice = os.getenv("LIVEKIT_TTS_VOICE", "Charon").strip() or "Charon"
     tts_language = os.getenv("LIVEKIT_TTS_LANGUAGE", "fa").strip() or "fa"
-    # Effective TTS model/voice for logs — cloudflare uses its own vars
+    # Effective TTS model/voice for logs — cloudflare uses its own vars, elevenlabs مستقیم از elevenlabs.io
     cf_tts_model = os.getenv("CLOUDFLARE_TTS_MODEL", "elevenlabs/eleven-v3").strip() or "elevenlabs/eleven-v3"
     cf_tts_voice = (
         os.getenv("CLOUDFLARE_TTS_VOICE_ID", "").strip()
         or os.getenv("ELEVENLABS_VOICE_ID", "").strip()
+        or livekit_tts_voice
+    ) or "JBFqnCBsd6RMkjVDRZzb"
+    eleven_tts_model = (
+        os.getenv("ELEVENLABS_MODEL", "").strip()
+        or os.getenv("ELEVENLABS_TTS_MODEL", "").strip()
+        or "eleven_flash_v2_5"
+    )
+    eleven_tts_voice = (
+        os.getenv("ELEVENLABS_VOICE_ID", "").strip()
+        or os.getenv("ELEVEN_VOICE_ID", "").strip()
         or livekit_tts_voice
     ) or "JBFqnCBsd6RMkjVDRZzb"
 
@@ -103,10 +113,14 @@ async def entrypoint(ctx: agents.JobContext) -> None:
 
     # Human-readable labels and effective model/voice for logs
     def _label(p: str) -> str:
-        return {"cloudflare": "Cloudflare", "direct": "Direct", "inference": "Inference"}.get(p, p)
+        return {"cloudflare": "Cloudflare", "elevenlabs": "ElevenLabs", "direct": "Direct", "inference": "Inference"}.get(p, p)
 
-    eff_tts_model = cf_tts_model if tts_prov == "cloudflare" else livekit_tts_model
-    eff_tts_voice = cf_tts_voice if tts_prov == "cloudflare" else livekit_tts_voice
+    if tts_prov == "cloudflare":
+        eff_tts_model, eff_tts_voice = cf_tts_model, cf_tts_voice
+    elif tts_prov == "elevenlabs":
+        eff_tts_model, eff_tts_voice = eleven_tts_model, eleven_tts_voice
+    else:
+        eff_tts_model, eff_tts_voice = livekit_tts_model, livekit_tts_voice
     # Use effective for metrics/logs
     tts_model = eff_tts_model
     tts_voice = eff_tts_voice
@@ -233,7 +247,12 @@ async def entrypoint(ctx: agents.JobContext) -> None:
 
     turn_handling = speed_profile(job_logger)
     # Use effective model for streaming log
-    streaming_desc = "Cloudflare eleven-v3 (via StreamAdapter)" if tts_prov == "cloudflare" else ("GeminiTTS via SDK StreamAdapter (sentence-level)" if not tts.capabilities.streaming else "native streaming")
+    if tts_prov == "cloudflare":
+        streaming_desc = "Cloudflare eleven-v3 (via StreamAdapter)"
+    elif tts_prov == "elevenlabs":
+        streaming_desc = f"ElevenLabs {eleven_tts_model} (native streaming)"
+    else:
+        streaming_desc = "GeminiTTS via SDK StreamAdapter (sentence-level)" if not tts.capabilities.streaming else "native streaming"
     job_logger.info("Streaming: STT=%s (streaming=%s) · LLM=%s streaming · TTS=%s (%s) · turn_handling=%s · FAST_START=%s",
         stt_model, getattr(stt.capabilities,"streaming","?"), llm_model, eff_tts_model,
         streaming_desc,

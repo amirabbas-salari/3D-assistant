@@ -25,7 +25,10 @@ def tts_provider() -> str:
         # also allow CLOUDFLARE_TTS_MODEL containing elevenlabs to imply cloudflare
         # but don't auto-enable; explicit TTS_PROVIDER is required otherwise fallback
         raw = os.getenv("SPEECH_PROVIDER", "inference").strip().lower()
-    if raw in {"cloudflare", "cf", "elevenlabs", "eleven-v3", "eleven_v3", "elevenlabs/eleven-v3"}:
+    # مستقیم از elevenlabs.io — مدل درخواستی eleven_flash_v2_5 هم اینجا می‌آید
+    if raw in {"elevenlabs", "eleven", "elevenlabs.io", "eleven_flash_v2_5", "eleven_flash_v2", "eleven_turbo_v2_5", "eleven_turbo_v2", "eleven_multilingual_v2", "eleven_multilingual_v1", "eleven_v3", "eleven_v4", "eleven_v4_turbo"}:
+        return "elevenlabs"
+    if raw in {"cloudflare", "cf", "eleven-v3", "eleven_v3", "elevenlabs/eleven-v3"}:
         return "cloudflare"
     if raw in {"direct", "byok", "provider", "own-keys"}:
         return "direct"
@@ -50,6 +53,10 @@ def validate_tts_config() -> None:
         if not (os.getenv("CLOUDFLARE_TTS_VOICE_ID") or os.getenv("ELEVENLABS_VOICE_ID") or "").strip():
             # not fatal — default voice_id will be used
             pass
+    elif prov == "elevenlabs":
+        # مستقیم از elevenlabs.io با مدل eleven_flash_v2_5
+        if not (os.getenv("ELEVENLABS_API_KEY") or os.getenv("ELEVEN_API_KEY") or "").strip():
+            raise RuntimeError("TTS_PROVIDER=elevenlabs requires ELEVENLABS_API_KEY (یا ELEVEN_API_KEY)")
     elif prov == "direct":
         missing = [n for n in ("DEEPGRAM_API_KEY", "GOOGLE_API_KEY") if not (os.getenv(n) or "").strip()]
         # Only warn for TTS direct needs GOOGLE_API_KEY
