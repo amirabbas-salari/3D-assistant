@@ -37,7 +37,13 @@ class PersianAssistant(Agent):
                 instructions += " پایگاه دانش در صورت نیاز به پرامپت اضافه می‌شود؛ اگر اطلاعات مرتبط دیدی از همان استفاده کن وگرنه با دانش عمومی ادامه بده."
         selling = sales_prompt()
         if selling:
+            compact = os.getenv("AGENT_COMPACT_PROMPT", "true").strip().lower() in {"1","true","yes","on"}
+            fast_profile = os.getenv("AGENT_SPEED_PROFILE","ultra").strip().lower() in {"ultra","instant","fastest"}
+            if (compact or fast_profile) and len(selling) > 2000:
+                selling = selling[:1800].strip() + "\n\n— نکته: پاسخ کوتاه (۱ جمله + ۱ سوال) و دعوت به بررسی رایگان."
             instructions += "\n\nمهارت‌های فروش و مارکتینگ (در همه‌ی گفتگوها رعایت کن):\n" + selling
+        if len(instructions) > 8000:
+            instructions = instructions[:7800] + "\n[truncated]"
         super().__init__(instructions=instructions, tools=[knowledge_tool] if (knowledge_tool and use_tool) else [])
 
     async def llm_node(self, chat_ctx, tools, model_settings=None):
