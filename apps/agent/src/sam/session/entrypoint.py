@@ -81,10 +81,11 @@ async def entrypoint(ctx: agents.JobContext) -> None:
         or livekit_tts_voice
     ) or "JBFqnCBsd6RMkjVDRZzb"
 
+    # بهینه برای سرعت: retry کمتر + تایم‌اوت کوتاه‌تر (پیش‌فرض‌ها 6*3s=18s بود → گلوگاه)
     inference_conn_options = APIConnectOptions(
-        max_retry=int(os.getenv("LIVEKIT_INFERENCE_MAX_RETRY","6")),
-        retry_interval=float(os.getenv("LIVEKIT_INFERENCE_RETRY_INTERVAL","3.0")),
-        timeout=float(os.getenv("LIVEKIT_INFERENCE_TIMEOUT","15.0")),
+        max_retry=int(os.getenv("LIVEKIT_INFERENCE_MAX_RETRY","4")),
+        retry_interval=float(os.getenv("LIVEKIT_INFERENCE_RETRY_INTERVAL","1.5")),
+        timeout=float(os.getenv("LIVEKIT_INFERENCE_TIMEOUT","10.0")),
     )
     session_conn_options = SessionConnectOptions(
         stt_conn_options=inference_conn_options,
@@ -97,6 +98,26 @@ async def entrypoint(ctx: agents.JobContext) -> None:
     tts_prov = tts_provider()
     stt = build_stt(stt_prov, model=stt_model, language=stt_language, conn_options=inference_conn_options, fallback=stt_fallback_models, job_logger=job_logger)
     tts = build_tts(tts_prov, model=livekit_tts_model, voice=livekit_tts_voice, language=tts_language, conn_options=inference_conn_options, job_logger=job_logger)
+    # تضمین streaming: حتی اگر TTS اصلی streaming نباشد، با StreamAdapter جمله‌ای stream می‌شود (سرعت +30%)
+    if not getattr(tts.capabilities, "streaming", False):
+        try:
+            from livekit.agents.tts import StreamAdapter
+            from livekit.agents import tokenize as _tok
+            # SentenceTokenizer بومی SDK — اگر موجود نبود fallback به basic
+            try:
+                sent_tok = _tok.basic.SentenceTokenizer()
+            except Exception:
+                try:
+                    sent_tok = _tok.tokenize.basic.SentenceTokenizer()
+                except Exception:
+                    sent_tok = None
+            if sent_tok is not None:
+                tts = StreamAdapter(tts=tts, sentence_tokenizer=sent_tok)  # type: ignore[arg-type]
+                job_logger.info("TTS streaming تضمین شد: StreamAdapter فعال (جمله‌ای)")
+            else:
+                job_logger.info("TTS non-streaming ولی tokenizer در دسترس نبود — بدون adapter ادامه می‌دهیم")
+        except Exception as e:
+            job_logger.warning("StreamAdapter فعال‌سازی نشد: %s", e)
 
     # Fallback for Cloudflare 402 (insufficient credits) → LiveKit Inference
     # Set CLOUDFLARE_TTS_FALLBACK=false to disable
@@ -260,13 +281,35 @@ async def entrypoint(ctx: agents.JobContext) -> None:
 
     extra_body = llm_request_body(llm_max_tokens, job_logger)
 
+    # هشدار مدل کند: gpt-oss برای voice مناسب نیست (TTFT 1-5s)
+    if "gpt-oss" in llm_model.lower():
+        job_logger.warning("LLM=%s کند است (TTFT 1-5s). برای <1s از @cf/meta/llama-3.3-70b-instruct-fp8-fast یا @cf/meta/llama-3.1-8b-instruct استفاده کنید", llm_model)
+    # تذکر max_tokens بالا = تاخیر بیشتر (هر توکن اضافی = زمان)
+    if llm_max_tokens > 200:
+        job_logger.info("LLM max_tokens=%s بالا است؛ برای voice کمتر از 150 توصیه می‌شود (هر 10 توکن ~80ms)", llm_max_tokens)
+
+    # openai.LLM creation بلوکه‌کننده است (SSL context ~3s روی Windows) — به thread offload کن
+    try:
+        _llm = await asyncio.to_thread(lambda: openai.LLM(model=llm_model, api_key=cloudflare_api_token, base_url=cloudflare_base_url, extra_body=extra_body))
+    except Exception as e:
+        job_logger.warning("LLM init از thread شکست خورد (%s) — fallback به ساخت مستقیم", e)
+        _llm = openai.LLM(model=llm_model, api_key=cloudflare_api_token, base_url=cloudflare_base_url, extra_body=extra_body)
+
     session = AgentSession(
         stt=stt,
-        llm=openai.LLM(model=llm_model, api_key=cloudflare_api_token, base_url=cloudflare_base_url, extra_body=extra_body),
+        llm=_llm,
         tts=tts,
         conn_options=session_conn_options,
         **({"turn_handling": turn_handling} if turn_handling else {}),
     )
+
+    # Prewarm TTS: اتصال وب‌سوکت را قبل از اولین نوبت باز کن (TTFB کمتر)
+    if hasattr(tts, "prewarm"):
+        try:
+            tts.prewarm()  # type: ignore[attr-defined]
+            job_logger.info("TTS prewarm فراخوانی شد")
+        except Exception as e:
+            job_logger.warning("TTS prewarm شکست: %s", e)
 
     av_provider = avatar_provider()
     if av_provider == "none":
@@ -333,6 +376,8 @@ async def entrypoint(ctx: agents.JobContext) -> None:
     knowledge_index, knowledge_config = _load_knowledge(job_logger)
     tool_timings: dict[str,float] = {}
     knowledge_tool = _make_knowledge_tool(knowledge_index, knowledge_config, job_logger, tool_timings) if knowledge_index is not None else None
+    # نگه‌داشتن پیام preload برای پاکسازی بعد از هر نوبت (جلوگیری از رشد بی‌نهایت context)
+    _rag_preload_msg: list = [None]  # ChatMessage | None
 
     @session.on("conversation_item_added")
     def on_conversation_item_added(event) -> None:
@@ -350,8 +395,17 @@ async def entrypoint(ctx: agents.JobContext) -> None:
                         preload_ctx = _rag_preload(text, knowledge_index, knowledge_config, job_logger, tool_timings)
                         if preload_ctx and hasattr(session,"chat_ctx") and session.chat_ctx is not None:
                             try:
-                                session.chat_ctx.add_message(role="system", content=f"دانش مرتبط (از پایگاه شرکت):\n{preload_ctx}")
-                                job_logger.info("RAG voice preload injected (%d chars)", len(preload_ctx))
+                                # اگر پیام قبلی پاک نشده، اول پاک کن (جلوگیری از انباشتگی)
+                                old = _rag_preload_msg[0]
+                                if old is not None:
+                                    try:
+                                        session.chat_ctx.remove(old)
+                                    except Exception:
+                                        pass
+                                    _rag_preload_msg[0] = None
+                                msg = session.chat_ctx.add_message(role="system", content=f"دانش مرتبط (از پایگاه شرکت):\n{preload_ctx}")
+                                _rag_preload_msg[0] = msg
+                                job_logger.info("RAG voice preload injected (%d chars) — موقت برای همین نوبت", len(preload_ctx))
                             except Exception as e:
                                 job_logger.warning("RAG chat_ctx inject failed: %s", e)
                     except Exception as e:
@@ -366,6 +420,14 @@ async def entrypoint(ctx: agents.JobContext) -> None:
         elif role == "assistant":
             text = (getattr(item,"text_content","") or "").strip()
             job_logger.info("LLM produced assistant text (%d chars)", len(text))
+            # پاکسازی پیام RAG موقت — نوبت بعدی با context تمیز شروع شود (سرعت + دقت)
+            old = _rag_preload_msg[0]
+            if old is not None:
+                try:
+                    session.chat_ctx.remove(old)
+                except Exception:
+                    pass
+                _rag_preload_msg[0] = None
             if tts_requests["turn"]:
                 tool_timings["tts_requests"]=float(tts_requests["turn"])
             latency.record_turn(getattr(item,"metrics",None), reply_text=text, interrupted=bool(getattr(item,"interrupted",False)), stt_model=stt_model, llm_model=llm_model, tts_model=tts_model, tool_ms=dict(tool_timings))
