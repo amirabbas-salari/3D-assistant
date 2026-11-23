@@ -337,10 +337,12 @@ async def entrypoint(ctx: agents.JobContext) -> None:
                                 job_logger.warning("RAG chat_ctx inject failed: %s", e)
                     except Exception as e:
                                 job_logger.warning("RAG voice preload failed: %s", e)
-            try:
-                latency.mark_turn_start()
-            except Exception:
-                pass
+            # اگر STT interim قبلاً جمع شده، turn_start را ریست نکن — وگرنه stt_tokens پاک می‌شود و گانت خالی می‌ماند
+            if latency._turn_start_ts is None:
+                try:
+                    latency.mark_turn_start()
+                except Exception:
+                    pass
             latency.note_user_turn(getattr(item,"metrics",None))
         elif role == "assistant":
             text = (getattr(item,"text_content","") or "").strip()
