@@ -120,6 +120,7 @@ async def entrypoint(ctx: agents.JobContext) -> None:
     )
 
     # Wrap TTS for per-chunk tracking (هر تکه صدا = یک سگمنت در یک ردیف)
+    # روش: هر دو مسیر synthesize (ChunkedStream) و stream (SynthesizeStream) را پشتیبانی می‌کنیم
     try:
         from livekit.agents import tts as tts_api
         from livekit.agents.types import DEFAULT_API_CONNECT_OPTIONS
@@ -137,7 +138,6 @@ async def entrypoint(ctx: agents.JobContext) -> None:
                 except Exception:
                     pass
                 stream = self._inner.synthesize(text, conn_options=conn_options)
-                # wrap _run to capture end
                 orig_run = getattr(stream, "_run", None)
                 if callable(orig_run):
                     async def wrapped_run(output_emitter):
@@ -150,7 +150,6 @@ async def entrypoint(ctx: agents.JobContext) -> None:
                                 pass
                     stream._run = wrapped_run  # type: ignore
                 else:
-                    # fallback for streaming TTS with different API
                     orig_aclose = getattr(stream, "aclose", None)
                     if callable(orig_aclose):
                         orig = orig_aclose
@@ -165,7 +164,65 @@ async def entrypoint(ctx: agents.JobContext) -> None:
                         stream.aclose = wrapped_close  # type: ignore
                 return stream
 
-            # proxy other attrs
+            def stream(self, *, conn_options=DEFAULT_API_CONNECT_OPTIONS):
+                # streaming TTS (Inference/Google) — inner باید stream داشته باشد
+                try:
+                    inner_stream = self._inner.stream(conn_options=conn_options)
+                except NotImplementedError:
+                    # inner واقعاً streaming نیست — بگذار خطای اصلی بالا بیاید تا SDK fallback کند
+                    raise
+                except Exception:
+                    raise
+                # هر flush یک سگمنت (= یک جمله) است؛ push_text تا flush بافر می‌شود
+                orig_push = getattr(inner_stream, "push_text", None)
+                orig_flush = getattr(inner_stream, "flush", None)
+                orig_end = getattr(inner_stream, "end_input", None)
+
+                if callable(orig_push) and callable(orig_flush):
+                    buf = {"text": "", "started": False}
+
+                    def tracked_push(token: str, *a, **kw):
+                        if token:
+                            if not buf["started"]:
+                                try:
+                                    self._tracker.on_tts_start(token)
+                                except Exception:
+                                    pass
+                                buf["started"] = True
+                            buf["text"] += token
+                        return orig_push(token, *a, **kw)
+
+                    def tracked_flush(*a, **kw):
+                        txt = buf["text"].strip()
+                        if txt and buf["started"]:
+                            try:
+                                self._tracker.on_tts_end(txt)
+                            except Exception:
+                                pass
+                        buf["text"] = ""
+                        buf["started"] = False
+                        return orig_flush(*a, **kw)
+
+                    def tracked_end(*a, **kw):
+                        # اگر flush نشده باقی مانده، همین‌جا ببند
+                        txt = buf["text"].strip()
+                        if txt and buf["started"]:
+                            try:
+                                self._tracker.on_tts_end(txt)
+                            except Exception:
+                                pass
+                            buf["text"] = ""
+                            buf["started"] = False
+                        if callable(orig_end):
+                            return orig_end(*a, **kw)
+
+                    inner_stream.push_text = tracked_push  # type: ignore[method-assign]
+                    inner_stream.flush = tracked_flush  # type: ignore[method-assign]
+                    if callable(orig_end):
+                        inner_stream.end_input = tracked_end  # type: ignore[method-assign]
+
+                return inner_stream
+
             def __getattr__(self, name):
                 return getattr(self._inner, name)
 
