@@ -1,7 +1,6 @@
 import React from 'react';
 import { msLabel } from '../lib/latency.js';
 
-// هر مرحله: رنگ گرادینت تیره + روشن
 const STAGE_META = {
   end_of_turn_delay: { label: 'تشخیص پایان نوبت', short: 'Endpointing', color: '#ef6c00', bg: '#fff3e0', border: '#ffcc80' },
   transcription_delay: { label: 'STT نهایی', short: 'STT', color: '#1565c0', bg: '#e3f2fd', border: '#90caf9' },
@@ -22,32 +21,49 @@ const PIPELINE_ORDER = [
   'playback_latency',
 ];
 
-function computeSpans(last) {
-  const stages = last?.stages || {};
-  const e2e = last?.e2e_ms ?? last?.response_delay_ms ?? null;
-  const llmStart = Math.max(stages.end_of_turn_delay || 0, stages.transcription_delay || 0);
+function toNum(v, fallback = 0) {
+  const n = Number(v);
+  return Number.isFinite(n) ? n : fallback;
+}
 
-  const spans = [];
-  for (const key of PIPELINE_ORDER) {
-    const dur = stages[key];
-    if (dur == null) continue;
-    let start = 0;
-    if (key === 'end_of_turn_delay' || key === 'transcription_delay') start = 0;
-    else if (key === 'knowledge_lookup' || key === 'llm_node_ttft' || key === 'llm_node_ttfs') start = llmStart;
-    else if (key === 'tts_node_ttfb') start = llmStart + (stages.llm_node_ttfs ?? stages.llm_node_ttft ?? 0);
-    else if (key === 'playback_latency') {
-      const ttsStart = llmStart + (stages.llm_node_ttfs ?? stages.llm_node_ttft ?? 0);
-      start = ttsStart + (stages.tts_node_ttfb || 0);
+function computeSpans(last) {
+  try {
+    const stages = last?.stages || {};
+    const e2eRaw = last?.e2e_ms ?? last?.response_delay_ms ?? null;
+    const e2e = e2eRaw != null ? toNum(e2eRaw, null) : null;
+    const llmStart = Math.max(toNum(stages.end_of_turn_delay, 0), toNum(stages.transcription_delay, 0));
+
+    const spans = [];
+    for (const key of PIPELINE_ORDER) {
+      const raw = stages[key];
+      if (raw == null) continue;
+      const dur = toNum(raw, null);
+      if (dur == null || !Number.isFinite(dur) || dur < 0) continue;
+      let start = 0;
+      if (key === 'end_of_turn_delay' || key === 'transcription_delay') start = 0;
+      else if (key === 'knowledge_lookup' || key === 'llm_node_ttft' || key === 'llm_node_ttfs') start = llmStart;
+      else if (key === 'tts_node_ttfb') start = llmStart + toNum(stages.llm_node_ttfs ?? stages.llm_node_ttft ?? 0, 0);
+      else if (key === 'playback_latency') {
+        const ttsStart = llmStart + toNum(stages.llm_node_ttfs ?? stages.llm_node_ttft ?? 0, 0);
+        start = ttsStart + toNum(stages.tts_node_ttfb, 0);
+      }
+      if (!Number.isFinite(start)) start = 0;
+      const end = start + dur;
+      const meta = STAGE_META[key] || { label: key, short: key, color: '#607d8b', bg: '#eceff1', border: '#cfd8dc' };
+      spans.push({ key, label: meta.label, short: meta.short, color: meta.color, bg: meta.bg, border: meta.border, start, end, dur });
     }
-    const end = start + dur;
-    const meta = STAGE_META[key] || { label: key, color: '#607d8b', bg: '#eceff1', border: '#cfd8dc' };
-    spans.push({ key, label: meta.label, short: meta.short, color: meta.color, bg: meta.bg, border: meta.border, start, end, dur });
+    const ends = spans.map(s => s.end);
+    const maxFromSpans = ends.length ? Math.max(...ends) : 0;
+    const maxEnd = Math.max(1, maxFromSpans, e2e != null && Number.isFinite(e2e) ? e2e : 0);
+    return { stages, e2e, maxEnd, spans, llmStart };
+  } catch (e) {
+    console.error('[TimelineChart computeSpans]', e);
+    return { stages: {}, e2e: null, maxEnd: 1, spans: [], llmStart: 0 };
   }
-  const maxEnd = Math.max(1, ...spans.map(s => s.end), e2e || 0);
-  return { stages, e2e, maxEnd, spans, llmStart };
 }
 
 export default function TimelineChart({ latency }) {
+  // هیچ latency هنوز نیامده → کارت خالی ولی بدون کرش
   if (!latency?.last) {
     return (
       <section className="panel gantt-panel gantt-empty">
@@ -71,31 +87,45 @@ export default function TimelineChart({ latency }) {
     );
   }
 
-  const { e2e, maxEnd, spans, llmStart } = computeSpans(latency.last);
-  const turns = latency.turns;
-  const tickVals = [0, maxEnd * 0.25, maxEnd * 0.5, maxEnd * 0.75, maxEnd];
+  let e2e, maxEnd, spans, llmStart;
+  try {
+    ({ e2e, maxEnd, spans, llmStart } = computeSpans(latency.last));
+  } catch (err) {
+    console.error('[TimelineChart]', err);
+    return (
+      <section className="panel gantt-panel">
+        <div style={{ padding: 12, fontSize: 11, color: '#8a4444' }}>خطا در نمایش گانت — لاگ مرورگر را چک کن.</div>
+        <style>{ganttCss}</style>
+      </section>
+    );
+  }
+
+  const turns = latency.turns ?? 0;
+  const safeMaxEnd = Number.isFinite(maxEnd) && maxEnd > 0 ? maxEnd : 1;
+  const tickVals = [0, safeMaxEnd * 0.25, safeMaxEnd * 0.5, safeMaxEnd * 0.75, safeMaxEnd];
 
   return (
     <section className="panel gantt-panel">
       <div className="panel-heading">
         <div>
           <span style={{ width: 28, height: 28, display: 'grid', placeItems: 'center', borderRadius: 8, background: '#e8f0fe', color: '#2857a5', fontWeight: 800, fontSize: 11 }}>◧</span>
-          <div><h2>گانت پایپ‌لاین — نوبت #{latency.last.index}</h2><small>محور زمان: ۰ = پایان صحبت کاربر → {msLabel(maxEnd)} سراسری</small></div>
+          <div><h2>گانت پایپ‌لاین — نوبت #{latency.last?.index ?? '—'}</h2><small>محور زمان: ۰ = پایان صحبت کاربر → {msLabel(safeMaxEnd)} سراسری</small></div>
         </div>
-        <span className="gantt-e2e-badge" title={`e2e ${msLabel(e2e)} · max end ${msLabel(maxEnd)}`}>{msLabel(e2e || maxEnd)} سراسری</span>
+        <span className="gantt-e2e-badge" title={`e2e ${msLabel(e2e)} · max end ${msLabel(safeMaxEnd)}`}>{msLabel(e2e ?? safeMaxEnd)} سراسری</span>
       </div>
 
-      {/* محور زمان ticks */}
       <div className="gantt-axis">
         <div className="gantt-axis-track">
-          {tickVals.map((v, i) => (
-            <span key={i} className="gantt-tick" style={{ left: `${(v / maxEnd) * 100}%` }}>
-              <i />
-              <b>{i === 0 ? '۰' : msLabel(v)}</b>
-            </span>
-          ))}
-          {/* خط پایان سراسری e2e */}
-          {e2e != null && <span className="gantt-e2e-line" style={{ left: `${Math.min(100, (e2e / maxEnd) * 100)}%` }} title={`پایان سراسری: ${msLabel(e2e)}`} />}
+          {tickVals.map((v, i) => {
+            const pct = Number.isFinite(v) && Number.isFinite(safeMaxEnd) ? (v / safeMaxEnd) * 100 : 0;
+            return (
+              <span key={i} className="gantt-tick" style={{ left: `${pct}%` }}>
+                <i />
+                <b>{i === 0 ? '۰' : msLabel(v)}</b>
+              </span>
+            );
+          })}
+          {e2e != null && Number.isFinite(e2e) && <span className="gantt-e2e-line" style={{ left: `${Math.min(100, (e2e / safeMaxEnd) * 100)}%` }} title={`پایان سراسری: ${msLabel(e2e)}`} />}
         </div>
         <div className="gantt-axis-labels">
           <span>شروع (پایان سوال)</span>
@@ -103,13 +133,16 @@ export default function TimelineChart({ latency }) {
         </div>
       </div>
 
-      {/* سطرهای گانت */}
       <div className="gantt-rows">
+        {spans.length === 0 && <div style={{ padding: '10px 4px', fontSize: 10, color: '#6b7c8d', textAlign: 'center' }}>دادهٔ مرحله‌ای برای این نوبت ثبت نشد.</div>}
         {spans.map(s => {
-          const leftPct = (s.start / maxEnd) * 100;
-          const widthPct = Math.max(1.2, (s.dur / maxEnd) * 100);
-          const pctOfTotal = maxEnd ? ((s.dur / maxEnd) * 100).toFixed(1) : '0';
+          const leftPct = Number.isFinite(s.start) && Number.isFinite(safeMaxEnd) ? (s.start / safeMaxEnd) * 100 : 0;
+          const widthPct = Number.isFinite(s.dur) && Number.isFinite(safeMaxEnd) ? Math.max(1.2, (s.dur / safeMaxEnd) * 100) : 1.2;
+          const pctOfTotal = safeMaxEnd ? ((s.dur / safeMaxEnd) * 100).toFixed(1) : '0';
           const isNarrow = widthPct < 12;
+          // clamp تا بیرون نزند
+          const clampedLeft = Math.max(0, Math.min(100, leftPct));
+          const clampedWidth = Math.max(1.2, Math.min(100 - clampedLeft, widthPct));
           return (
             <div key={s.key} className="gantt-row">
               <div className="gantt-label">
@@ -120,19 +153,17 @@ export default function TimelineChart({ latency }) {
                 </div>
               </div>
               <div className="gantt-track">
-                {/* grid lines */}
                 <div className="gantt-grid">
                   {[25, 50, 75].map(p => <span key={p} style={{ left: `${p}%` }} />)}
                 </div>
                 <div
                   className="gantt-bar"
-                  style={{ left: `${leftPct}%`, width: `${widthPct}%`, background: s.color, borderColor: s.border, boxShadow: `0 1px 6px ${s.color}33` }}
+                  style={{ left: `${clampedLeft}%`, width: `${clampedWidth}%`, background: s.color, borderColor: s.border, boxShadow: `0 1px 6px ${s.color}33` }}
                   title={`${s.label}: ${msLabel(s.start)} → ${msLabel(s.end)} (طول ${msLabel(s.dur)} · ${pctOfTotal}% کل)`}
                 >
                   {!isNarrow && <span className="gantt-bar-text">{msLabel(s.dur)}</span>}
                 </div>
-                {isNarrow && <span className="gantt-bar-outside" style={{ left: `calc(${leftPct + widthPct}% + 6px)`, color: s.color }}>{msLabel(s.dur)}</span>}
-                {/* برچسب بازه روی هاور موبایل */}
+                {isNarrow && <span className="gantt-bar-outside" style={{ left: `calc(${clampedLeft + clampedWidth}% + 6px)`, color: s.color }}>{msLabel(s.dur)}</span>}
                 <span className="gantt-range-hint">{msLabel(s.start)} → {msLabel(s.end)}</span>
               </div>
               <div className="gantt-time">
@@ -144,7 +175,6 @@ export default function TimelineChart({ latency }) {
         })}
       </div>
 
-      {/* فوتر خلاصه */}
       <div className="gantt-footer">
         <div className="gantt-summary">
           <span>شروع LLM پس از <b>{msLabel(llmStart)}</b> (max تشخیص/STT)</span>
@@ -154,8 +184,10 @@ export default function TimelineChart({ latency }) {
             <>
               <span>·</span>
               <span>کندترین میانگین: <b>{(() => {
-                const top = Object.entries(latency.averages).sort((a, b) => b[1] - a[1])[0];
-                return top ? `${STAGE_META[top[0]]?.label || top[0]} ${msLabel(top[1])}` : '—';
+                try {
+                  const top = Object.entries(latency.averages).sort((a, b) => toNum(b[1], 0) - toNum(a[1], 0))[0];
+                  return top ? `${STAGE_META[top[0]]?.label || top[0]} ${msLabel(top[1])}` : '—';
+                } catch { return '—'; }
               })()}</b></span>
             </>
           )}
