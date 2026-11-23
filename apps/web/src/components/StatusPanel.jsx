@@ -1,7 +1,6 @@
 import React from 'react';
 import { Activity, Database, Layers, Zap } from 'lucide-react';
 import { LATENCY_STAGES, msLabel } from '../lib/latency.js';
-import TimelineChart from './TimelineChart.jsx';
 
 export default function StatusPanel({ health, latency, connected }) {
   return (
@@ -50,8 +49,6 @@ export default function StatusPanel({ health, latency, connected }) {
           <small>{latency.turns} نوبت اندازه‌گیری‌شده</small>
         </div>
       )}
-      {/* Timeline waterfall */}
-      {latency && <TimelineChart latency={latency} />}
       {latency?.averages && Object.keys(latency.averages).length > 0 && (
         <div style={{margin:'10px 13px 0', padding:'8px 10px', background:'#f8f9fa', border:'1px solid #edf0f3', borderRadius:'6px', fontSize:'9px', color:'#5a6b7a'}}>
           <div style={{display:'flex', alignItems:'center', gap:6, marginBottom:4}}><Zap size={12} style={{color:'#ef6c00'}}/><strong>میانگین {latency.turns} نوبت</strong></div>
