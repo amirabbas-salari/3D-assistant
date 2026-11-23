@@ -162,6 +162,11 @@ async def entrypoint(ctx: agents.JobContext) -> None:
     def on_session_error(event) -> None:
         error = event.error
         status = getattr(error,"status_code",None)
+        body_str = str(getattr(error, "body", "") or str(error))
+        # ارور 400 معروف Cloudflare وقتی ابزار (function calling) فرستاده می‌شود
+        if status == 400 and "array not in string" in body_str:
+            job_logger.error("LLM 400: Cloudflare gpt-oss-120b ابزار را نمی‌پذیرد (array not in string). فیکس: .env → RAG_PRELOAD=true و RAG_TOOL_ENABLED=false (یا خالی) بگذار و ری‌استارت کن. موقتاً بدون RAG جواب می‌دهد.")
+            return
         if status == 429:
             rate_limit_hits["count"] += 1
             if not rate_limit_hits["hinted"] and rate_limit_hits["count"] >= 4:
@@ -193,7 +198,10 @@ async def entrypoint(ctx: agents.JobContext) -> None:
             text = (getattr(item,"text_content","") or "").strip()
             if text:
                 job_logger.info("User turn committed (%d chars)", len(text))
-                if knowledge_index is not None and os.getenv("RAG_PRELOAD","false").strip().lower() in {"1","true","yes","on"}:
+                # برای Cloudflare: اگر ابزار خاموش است، حتی بدون RAG_PRELOAD هم preload را امتحان کن
+                rag_tool_enabled_voice = os.getenv("RAG_TOOL_ENABLED", "false").strip().lower() in {"1","true","yes","on"}
+                use_preload_voice = os.getenv("RAG_PRELOAD","false").strip().lower() in {"1","true","yes","on"} or not rag_tool_enabled_voice
+                if knowledge_index is not None and use_preload_voice:
                     try:
                         preload_ctx = _rag_preload(text, knowledge_index, knowledge_config, job_logger, tool_timings)
                         if preload_ctx and hasattr(session,"chat_ctx") and session.chat_ctx is not None:
@@ -225,7 +233,10 @@ async def entrypoint(ctx: agents.JobContext) -> None:
         job_logger.info("Text chat input from %s (%d chars)", sender, len(text))
         try:
             session.interrupt()
-            if knowledge_index is not None and os.getenv("RAG_PRELOAD","false").strip().lower() in {"1","true","yes","on"}:
+            # اگر ابزار خاموش است (حالت امن Cloudflare) حتی با RAG_PRELOAD=false هم preload کن
+            rag_tool_enabled = os.getenv("RAG_TOOL_ENABLED", "false").strip().lower() in {"1","true","yes","on"}
+            use_preload = os.getenv("RAG_PRELOAD","false").strip().lower() in {"1","true","yes","on"} or not rag_tool_enabled
+            if knowledge_index is not None and use_preload:
                 preload_ctx = _rag_preload(text, knowledge_index, knowledge_config, job_logger, tool_timings)
                 if preload_ctx:
                     handle = session.generate_reply(user_input=text, instructions=f"دانش مرتبط از پایگاه شرکت (فقط از همین استفاده کن):\n{preload_ctx}")
@@ -235,7 +246,16 @@ async def entrypoint(ctx: agents.JobContext) -> None:
                 handle = session.generate_reply(user_input=text)
             await handle
             if handle.exception():
-                job_logger.error("Text chat reply failed: %s", handle.exception())
+                exc = handle.exception()
+                body = str(getattr(exc, "body", "") or str(exc))
+                if "array not in string" in body:
+                    job_logger.warning("Text reply با ابزار شکست خورد — یک بار بدون ابزار تلاش می‌کنم")
+                    retry = session.generate_reply(user_input=text)
+                    await retry
+                    if retry.exception():
+                        job_logger.error("Text chat retry هم شکست: %s", retry.exception())
+                    return
+                job_logger.error("Text chat reply failed: %s", exc)
         except Exception:
             job_logger.exception("Could not generate reply to text chat")
 

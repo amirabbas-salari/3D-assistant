@@ -19,13 +19,21 @@ class PersianAssistant(Agent):
         )
         if fast_start:
             instructions += (" فقط ۱ جمله‌ی کوتاه (۵ تا ۹ کلمه) که جواب اصلی توشه + ۱ سوال کوتاه (۳ تا ۷ کلمه). بیشتر از ۲ جمله نشو. مقدمه‌چینی، «حتما»، «سوال خوبیه» ممنوع. هر جمله یه فکر کامل باشه، نه تکه‌تکه.")
+        # Cloudflare Workers AI (gpt-oss-120b) با ابزار function-calling ناسازگار است و خطای 400
+        # "array not in string" می‌دهد. پس به صورت پیش‌فرض ابزار را خاموش می‌کنیم و از preload استفاده می‌کنیم.
+        use_tool = False
         if knowledge_tool is not None:
             preload = os.getenv("RAG_PRELOAD", "false").strip().lower() in {"1","true","yes","on"}
-            if preload:
+            tool_enabled = os.getenv("RAG_TOOL_ENABLED", "false").strip().lower() in {"1","true","yes","on"}
+            if tool_enabled and not preload:
+                instructions += " اگر پایگاه دانش فعال است و سؤال به خدمات/نمونه‌کار/قیمت شرکت مربوط است، ابزار search_knowledge را صدا بزن (استریم قطع می‌شود و دوباره وصل — ۱ راندتریپ اضافه). اگر چیزی پیدا نشد صادقانه بگو و با دانش عمومی ادامه بده."
+                use_tool = True
+            elif preload:
                 instructions += " پایگاه دانش قبلِ جواب به پرامپت اضافه شده؛ مستقیم با همان اطلاعات جواب بده، ابزار صدا نزن."
             else:
-                instructions += " اگر پایگاه دانش فعال است و سؤال به خدمات/نمونه‌کار/قیمت شرکت مربوط است، ابزار search_knowledge را صدا بزن (استریم قطع می‌شود و دوباره وصل — ۱ راندتریپ اضافه). اگر چیزی پیدا نشد صادقانه بگو و با دانش عمومی ادامه بده."
+                # حالت امن پیش‌فرض برای Cloudflare: بدون ابزار، RAG از طریق instructions تزریق می‌شود
+                instructions += " پایگاه دانش در صورت نیاز به پرامپت اضافه می‌شود؛ اگر اطلاعات مرتبط دیدی از همان استفاده کن وگرنه با دانش عمومی ادامه بده."
         selling = sales_prompt()
         if selling:
             instructions += "\n\nمهارت‌های فروش و مارکتینگ (در همه‌ی گفتگوها رعایت کن):\n" + selling
-        super().__init__(instructions=instructions, tools=[knowledge_tool] if knowledge_tool else [])
+        super().__init__(instructions=instructions, tools=[knowledge_tool] if (knowledge_tool and use_tool) else [])
