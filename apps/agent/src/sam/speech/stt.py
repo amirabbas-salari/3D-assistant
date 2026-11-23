@@ -39,6 +39,42 @@ def build_tts(provider: str, *, model: str, voice: str, language: str, conn_opti
         job_logger.info("TTS via Cloudflare Workers AI (model=%s, voice_id=%s, lang=%s, sr=%s)", cf_model, cf_voice_id, language, sr)
         return CloudflareTTS(model=cf_model, voice_id=cf_voice_id, sample_rate=sr)
 
+    if provider == "elevenlabs":
+        # مستقیم از elevenlabs.io — مدل درخواستی eleven_flash_v2_5
+        api_key = (
+            os.getenv("ELEVENLABS_API_KEY", "").strip()
+            or os.getenv("ELEVEN_API_KEY", "").strip()
+        )
+        if not api_key:
+            raise RuntimeError("TTS_PROVIDER=elevenlabs needs ELEVENLABS_API_KEY (یا ELEVEN_API_KEY)")
+        try:
+            from livekit.plugins import elevenlabs as eleven_plugin
+        except ImportError as exc:
+            raise RuntimeError(f"elevenlabs plugin missing ({exc}) — pip install livekit-plugins-elevenlabs")
+        # مدل: اولویت با ELEVENLABS_MODEL → ELEVENLABS_TTS_MODEL → مقدار ورودی
+        el_model = (
+            os.getenv("ELEVENLABS_MODEL", "").strip()
+            or os.getenv("ELEVENLABS_TTS_MODEL", "").strip()
+            or os.getenv("ELEVEN_TTS_MODEL", "").strip()
+            or "eleven_flash_v2_5"
+        )
+        # voice_id: اولویت ELEVENLABS_VOICE_ID → LIVEKIT_TTS_VOICE
+        el_voice_id = (
+            os.getenv("ELEVENLABS_VOICE_ID", "").strip()
+            or os.getenv("ELEVEN_VOICE_ID", "").strip()
+            or voice
+        ).strip() or "JBFqnCBsd6RMkjVDRZzb"
+        # encoding: پیش‌فرض mp3_22050_32 (بهینه برای TTFB)، قابل تنظیم با ELEVENLABS_ENCODING
+        encoding = os.getenv("ELEVENLABS_ENCODING", "").strip() or "mp3_22050_32"
+        job_logger.info("TTS via ElevenLabs direct (model=%s, voice_id=%s, lang=%s, encoding=%s) — مستقیم از elevenlabs.io", el_model, el_voice_id, language, encoding)
+        return eleven_plugin.TTS(
+            api_key=api_key,
+            voice_id=el_voice_id,
+            model=el_model,
+            encoding=encoding,
+            language=language or "fa",
+        )
+
     if provider == "direct":
         api_key=os.getenv("GOOGLE_API_KEY","").strip()
         if not api_key: raise RuntimeError("SPEECH_PROVIDER=direct needs GOOGLE_API_KEY")

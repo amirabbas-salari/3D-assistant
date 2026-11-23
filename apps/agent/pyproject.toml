@@ -9,6 +9,7 @@ dependencies = [
     "livekit-plugins-openai~=1.8",
     "livekit-plugins-deepgram~=1.8",
     "livekit-plugins-google~=1.8",
+    "livekit-plugins-elevenlabs~=1.8",
     "livekit-plugins-spatius~=1.8",
     "livekit-plugins-did~=1.8",
     "python-dotenv>=1.0.0",
