@@ -1,0 +1,20 @@
+{
+  "dataset_name": "Iran Full-Service Digital Agency Agent — Phase 1",
+  "version": "0.2.0",
+  "created": "2026-11-24",
+  "market": "Iran",
+  "agency_type": "full_service_digital_marketing",
+  "conversation_style": "natural",
+  "purpose": "RAG knowledge base and retrieval examples; not fine-tuning ground truth",
+  "counts": {
+    "documents": 11,
+    "conversations": 10,
+    "source_records": 9
+  },
+  "important_limitations": [
+    "Conversation records are authored synthetic scenarios, not transcripts of real customers.",
+    "Knowledge documents are independently authored syntheses informed by listed references, not verbatim copies.",
+    "All source licenses remain review_required until legal review confirms the intended use.",
+    "Local-market claims, prices, regulations, and platform availability require separate current verification."
+  ]
+}

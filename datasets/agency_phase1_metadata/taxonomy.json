@@ -1,0 +1,47 @@
+{
+  "domains": [
+    "sales",
+    "crm"
+  ],
+  "languages": [
+    "fa",
+    "en"
+  ],
+  "channels": [
+    "voice",
+    "chat"
+  ],
+  "content_types": [
+    "guide",
+    "playbook",
+    "procedure",
+    "schema_guide"
+  ],
+  "lead_statuses": [
+    "New",
+    "Contacting",
+    "Connected",
+    "Discovery Scheduled",
+    "Discovery Completed",
+    "Qualified",
+    "Proposal in Progress",
+    "Proposal Sent",
+    "Negotiation",
+    "Won",
+    "Lost",
+    "Nurture",
+    "Disqualified"
+  ],
+  "scenario_tags": [
+    "price_first_inbound",
+    "low_budget_objection",
+    "no_guaranteed_results",
+    "lead_followup_optout",
+    "discovery_summary",
+    "not_a_fit",
+    "discovery_for_full_service",
+    "budget_unknown_and_decision_maker",
+    "competitor_comparison",
+    "followup_timing"
+  ]
+}
