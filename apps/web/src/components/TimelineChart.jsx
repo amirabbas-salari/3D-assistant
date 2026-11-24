@@ -134,16 +134,35 @@ function computeSpans(last) {
       }
     }
 
-    // TTS: یک ردیف با تمام تکه‌های صدا
+    // TTS: یک ردیف با تمام تکه‌های صدا — t.start در tracker نسبت به llmStart ذخیره می‌شود، پس برای محور pipeline باید llmStart اضافه شود
+    // برای سازگاری با داده‌های قدیمی (که ممکن است نسبت به turn_start باشند) هر دو حالت را پوشش می‌دهیم
     let ttsGroup = null;
     let ttsSegments = [];
+    let _sttTotalForTTS = 0;
+    if (hasSTTTokens) {
+      try {
+        const s0 = last.stt_tokens[0], sN = last.stt_tokens[last.stt_tokens.length-1];
+        _sttTotalForTTS = Math.max(0, toNum(sN.end,0) - toNum(s0.start,0));
+      } catch {}
+    }
     if (hasTTSTokens) {
       const ttoks = last.tts_tokens;
       for (const t of ttoks) {
         const idx = toNum(t.idx, ttsSegments.length + 1);
-        const absStart = toNum(t.start, 0);
-        const absEnd = toNum(t.end, absStart);
-        const dur = toNum(t.dur, absEnd - absStart);
+        const rawStart = toNum(t.start, 0);
+        const rawEnd = toNum(t.end, rawStart);
+        const dur = toNum(t.dur, rawEnd - rawStart);
+        // تشخیص مبدا: اگر t.start خیلی بزرگ (>2s و > llmStart+1s) یعنی نسبت به turn_start است
+        let absStart, absEnd;
+        if (hasSTTTokens && _sttTotalForTTS > 500 && rawStart > _sttTotalForTTS + llmStart + 200) {
+          // turn-based → به pipeline تبدیل کن: کم کردن مدت صحبت
+          absStart = rawStart - _sttTotalForTTS;
+          absEnd = rawEnd - _sttTotalForTTS;
+        } else {
+          // llm-relative (حالت فعلی) → llmStart اضافه کن
+          absStart = llmStart + rawStart;
+          absEnd = llmStart + rawEnd;
+        }
         ttsSegments.push({
           idx,
           start: absStart,
@@ -172,28 +191,30 @@ function computeSpans(last) {
     }
 
     // STT: یک ردیف با تمام تکه‌های دریافت صدا (interim)
+    // interimها از turn_start (شروع صحبت) تا پایان صحبت ادامه دارند — روی محور pipeline (0=پایان گفتار) باید قبل از 0 یا جدا نمایش داده شوند
+    // برای جلوگیری از هم‌پوشانی اشتباه با LLM (باگ اسکرین‌شات: STT 0→3.73 روی LLM 1→2.2)، STT را خارج از محور pipeline نگه می‌داریم
     let sttGroup = null;
     let sttSegments = [];
+    let sttTotal = 0;
     if (hasSTTTokens) {
       const stoks = last.stt_tokens;
+      // ابتدا سگمنت‌های خام (نسبت به turn_start)
+      const rawSegs = [];
       for (const t of stoks) {
-        const idx = toNum(t.idx, sttSegments.length + 1);
+        const idx = toNum(t.idx, rawSegs.length + 1);
         const absStart = toNum(t.start, 0);
         const absEnd = toNum(t.end, absStart);
         const dur = toNum(t.dur, absEnd - absStart);
-        sttSegments.push({
-          idx,
-          start: absStart,
-          end: absEnd,
-          dur,
-          text: String(t.text || '').slice(0, 24),
-          color: sttColor(idx),
-          final: !!t.final,
-        });
+        rawSegs.push({ idx, start: absStart, end: absEnd, dur, text: String(t.text || '').slice(0, 24), color: sttColor(idx), final: !!t.final });
       }
+      sttTotal = rawSegs.length ? (rawSegs[rawSegs.length-1].end - rawSegs[0].start) : 0;
+      // STT را به عنوان ردیف جداگانه نگه می‌داریم ولی برای محور اصلی (pipeline) آن را در نظر نمی‌گیریم
+      // تا maxEnd و مقیاس محور تحت تأثیر مدت صحبت قرار نگیرد — جزئیات STT در پایین گانت به صورت جداگانه نشان داده می‌شود
+      // برای ردیف STT، سگمنت‌ها را نسبت به شروع خودش (0→sttTotal) نگه می‌داریم تا SegmentedBar درست پر شود
+      sttSegments = rawSegs.map(s => ({ ...s, start: s.start - (rawSegs[0]?.start || 0), end: s.end - (rawSegs[0]?.start || 0) }));
       if (sttSegments.length) {
-        const gStart = sttSegments[0].start;
-        const gEnd = sttSegments[sttSegments.length - 1].end;
+        const gStart = 0;
+        const gEnd = sttTotal;
         sttGroup = {
           key: 'stt_group',
           label: `دریافت صدا (STT) — همه تکه‌ها`,
@@ -205,27 +226,52 @@ function computeSpans(last) {
           kind: 'stt_group',
           segments: sttSegments,
           totalCount: stoks.length,
+          _rawStart: rawSegs[0]?.start || 0,
+          _rawEnd: rawSegs[rawSegs.length-1]?.end || 0,
         };
       }
     }
 
-    // ترتیب: STT → head (endpointing,RAG) → LLM → TTS → playback
+    // ترتیب: head (endpointing,RAG) → LLM → TTS → playback — STT جداگانه (خارج از محور pipeline)
+    // STT مدت صحبت کاربر است (تا 3-4 ثانیه) و نباید محور اصلی (پایپلاین از پایان گفتار تا شروع پخش) را بکشد — باگ اسکرین‌شات همین بود
     const ttsPlaybackOld = spans.filter(s => s.key === 'playback_latency');
     const endpointing = spans.filter(s => s.key === 'end_of_turn_delay');
     const headMid = spans.filter(s => s.key !== 'playback_latency' && s.key !== 'end_of_turn_delay');
     const ordered = [];
-    if (sttGroup) ordered.push(sttGroup);
     ordered.push(...endpointing);
     ordered.push(...headMid);
     if (llmGroup) ordered.push(llmGroup);
     if (ttsGroup) ordered.push(ttsGroup);
-    ordered.push(...ttsPlaybackOld);
+    // playback را بعد از TTS/LLM قرار بده — اگر TTS گروهی داریم، playback باید بعد از آن باشد نه در llmStart
+    if (ttsPlaybackOld.length) {
+      // اگر playback 0ms بود ولی e2e داریم، playback را در e2e قرار بده
+      for (const pb of ttsPlaybackOld) {
+        if (pb.dur === 0 && e2e != null && Number.isFinite(e2e)) {
+          pb.start = e2e;
+          pb.end = e2e;
+        } else if (ttsGroup) {
+          // در غیر این صورت بعد از TTS
+          const expectedStart = ttsGroup.end;
+          // اگر محاسبه قبلی (llmStart) خیلی زودتر بود، اصلاح کن
+          if (pb.start < expectedStart - 50) {
+            pb.start = expectedStart;
+            pb.end = expectedStart + pb.dur;
+          }
+        } else if (llmGroup && pb.start < llmGroup.end - 50) {
+          pb.start = llmGroup.end;
+          pb.end = llmGroup.end + pb.dur;
+        }
+      }
+      ordered.push(...ttsPlaybackOld);
+    }
 
-    const allEnds = [...ordered.map(s => s.end), ...llmTokenSegments.map(s => s.end), ...ttsSegments.map(s => s.end), ...sttSegments.map(s => s.end)];
-    const maxFromSpans = allEnds.length ? Math.max(...allEnds) : 0;
+    // STT را برای نمایش جداگانه نگه دار — در محور اصلی حساب نکن
+    const pipelineEnds = [...ordered.map(s => s.end), ...llmTokenSegments.map(s => s.end), ...ttsSegments.map(s => s.end)];
+    const maxFromSpans = pipelineEnds.length ? Math.max(...pipelineEnds) : 0;
     const maxEnd = Math.max(1, maxFromSpans, e2e != null && Number.isFinite(e2e) ? e2e : 0);
 
-    return { stages, e2e, maxEnd, spans: ordered, llmGroup, ttsGroup, sttGroup, hasLLMTokens, hasTTSTokens, hasSTTTokens, llmStart };
+    // sttTotal را هم برگردان تا UI بتواند توضیح دهد
+    return { stages, e2e, maxEnd, spans: ordered, llmGroup, ttsGroup, sttGroup, hasLLMTokens, hasTTSTokens, hasSTTTokens, llmStart, sttTotal };
   } catch (e) {
     console.error('[TimelineChart computeSpans]', e);
     return { stages: {}, e2e: null, maxEnd: 1, spans: [], llmGroup: null, ttsGroup: null, sttGroup: null, hasLLMTokens: false, hasTTSTokens: false, hasSTTTokens: false, llmStart: 0 };
@@ -276,9 +322,9 @@ export default function TimelineChart({ latency }) {
     );
   }
 
-  let e2e, maxEnd, spans, llmGroup, ttsGroup, sttGroup, hasLLMTokens, hasTTSTokens, hasSTTTokens, llmStart;
+  let e2e, maxEnd, spans, llmGroup, ttsGroup, sttGroup, hasLLMTokens, hasTTSTokens, hasSTTTokens, llmStart, sttTotal;
   try {
-    ({ e2e, maxEnd, spans, llmGroup, ttsGroup, sttGroup, hasLLMTokens, hasTTSTokens, hasSTTTokens, llmStart } = computeSpans(latency.last));
+    ({ e2e, maxEnd, spans, llmGroup, ttsGroup, sttGroup, hasLLMTokens, hasTTSTokens, hasSTTTokens, llmStart, sttTotal } = computeSpans(latency.last));
   } catch (err) {
     console.error('[TimelineChart]', err);
     return <section className="panel gantt-panel"><div style={{ padding: 12, fontSize: 11, color: '#8a4444' }}>خطا در نمایش گانت</div><style>{ganttCss}</style></section>;
@@ -293,7 +339,7 @@ export default function TimelineChart({ latency }) {
       <div className="panel-heading">
         <div>
           <span style={{ width: 28, height: 28, display: 'grid', placeItems: 'center', borderRadius: 8, background: '#e8f0fe', color: '#2857a5', fontWeight: 800, fontSize: 11 }}>◧</span>
-          <div><h2>گانت پایپ‌لاین — نوبت #{latency.last?.index ?? '—'} {hasSTTTokens ? `· دریافت ${sttGroup?.totalCount} تکه` : ''}{hasLLMTokens ? ` · LLM ${llmGroup?.totalCount} توکن` : ''}{hasTTSTokens ? ` · صدا ${ttsGroup?.totalCount} تکه` : ''}</h2><small>محور زمان: ۰ = شروع دریافت صدا → {msLabel(safeMaxEnd)} سراسری</small></div>
+          <div><h2>گانت پایپ‌لاین — نوبت #{latency.last?.index ?? '—'} {hasSTTTokens ? `· دریافت ${sttGroup?.totalCount} تکه` : ''}{hasLLMTokens ? ` · LLM ${llmGroup?.totalCount} توکن` : ''}{hasTTSTokens ? ` · صدا ${ttsGroup?.totalCount} تکه` : ''}</h2><small>محور زمان: ۰ = پایان گفتار کاربر → {msLabel(e2e ?? safeMaxEnd)} سراسری{e2e != null && sttTotal > 0 ? ` · دریافت قبل از ۰` : ''}</small></div>
         </div>
         <span className="gantt-e2e-badge">{msLabel(e2e ?? safeMaxEnd)} سراسری</span>
       </div>
@@ -306,7 +352,7 @@ export default function TimelineChart({ latency }) {
           })}
           {e2e != null && Number.isFinite(e2e) && <span className="gantt-e2e-line" style={{ left: `${Math.min(100, (e2e / safeMaxEnd) * 100)}%` }} />}
         </div>
-        <div className="gantt-axis-labels"><span>شروع (شروع دریافت صدا)</span><span>پایان (شروع پخش)</span></div>
+        <div className="gantt-axis-labels"><span>۰ = پایان گفتار کاربر</span><span>پایان (شروع پخش · {msLabel(e2e ?? safeMaxEnd)})</span></div>
       </div>
 
       {(hasSTTTokens || hasLLMTokens || hasTTSTokens) && (
@@ -317,6 +363,20 @@ export default function TimelineChart({ latency }) {
         </div>
       )}
 
+      {hasSTTTokens && sttGroup && (
+        <div className="gantt-stt-prelude">
+          <div className="gantt-label">
+            <i style={{ background: sttGroup.color }} />
+            <div><strong>{sttGroup.label}</strong><small>{sttGroup.short} · {msLabel(sttGroup.dur)} قبل از پایپلاین</small></div>
+          </div>
+          <div className="gantt-track" style={{ background: '#e3f2fd', borderColor: '#90caf9' }}>
+            <div className="gantt-grid">{[25, 50, 75].map(p => <span key={p} style={{ left: `${p}%` }} />)}</div>
+            <SegmentedBar group={sttGroup} maxEnd={sttGroup.dur} />
+            <span className="gantt-range-hint">مدت صحبت: {msLabel(sttTotal)} — قبل از ۰</span>
+          </div>
+          <div className="gantt-time"><b>{msLabel(sttGroup.dur)}</b><small>قبل از پایان گفتار</small></div>
+        </div>
+      )}
       <div className="gantt-rows">
         {spans.length === 0 && <div style={{ padding: '10px 4px', fontSize: 10, color: '#6b7c8d', textAlign: 'center' }}>داده‌ای ثبت نشد.</div>}
         {spans.map(s => {
@@ -386,8 +446,8 @@ export default function TimelineChart({ latency }) {
 
       <div className="gantt-footer">
         <div className="gantt-summary">
-          <span>شروع LLM پس از <b>{msLabel(llmStart)}</b></span><span>·</span><span>{turns} نوبت</span>
-          {hasSTTTokens && <><span>·</span><span><b>{sttGroup.totalCount} تکه دریافت صدا</b> در یک ردیف</span></>}
+          <span>شروع LLM پس از <b>{msLabel(llmStart)}</b> از پایان گفتار</span><span>·</span><span>{turns} نوبت</span>
+          {hasSTTTokens && <><span>·</span><span><b>{sttGroup.totalCount} تکه دریافت صدا</b> در {msLabel(sttTotal)} قبل از پایپلاین</span></>}
           {hasLLMTokens && <><span>·</span><span><b>{llmGroup.totalCount} توکن LLM</b> در یک ردیف</span></>}
           {hasTTSTokens && <><span>·</span><span><b>{ttsGroup.totalCount} تکه صدا</b> در یک ردیف</span></>}
         </div>
@@ -439,6 +499,7 @@ const ganttCss = `
 .gantt-legend{ display:flex; flex-wrap:wrap; gap:6px }
 .gantt-legend-item{ display:inline-flex; align-items:center; gap:5px; font-size:8px; color:#4a5a6a; background:#fff; border:1px solid #edf0f3; padding:3px 7px; border-radius:999px; font-weight:600 }
 .gantt-legend-item i{ width:8px; height:8px; border-radius:2px; flex:none }
+.gantt-stt-prelude{ display:grid; grid-template-columns:138px minmax(0,1fr) 110px; gap:8px; align-items:center; padding:6px 12px; background:#f0f7ff; border-bottom:1px solid #90caf9; }
 .left-column{ display:grid; gap:14px; align-content:start }
 @media(max-width:850px){
   .gantt-row{ grid-template-columns:118px minmax(0,1fr) 92px; }

@@ -216,12 +216,11 @@ class LatencyTracker:
 
     def on_tts_start(self, text: str) -> None:
         now = time.time()
-        if self._llm_start_ts is None:
-            # اگر LLM هنوز شروع نشده (مثلاً متن مستقیم)، Turn را به عنوان مرجع بگیر
-            self._turn_start_ts = self._turn_start_ts or now
-            base = self._turn_start_ts
-        else:
-            base = self._llm_start_ts
+        # همیشه نسبت به turn_start بسنج — محور گانت 0 = پایان گفتار نیست، بلکه turn_start است؛
+        # برای سازگاری با حالت pipeline (0=پایان گفتار) در فرانت‌ند تبدیل انجام می‌شود
+        # باگ قبلی: base = _llm_start_ts باعث می‌شد TTS روی 0.8s نمایش داده شود در حالی که LLM روی 1.0s بود (قبل از LLM!)
+        self._turn_start_ts = self._turn_start_ts or now
+        base = self._turn_start_ts
         start_ms = (now - base) * 1000.0
         self._tts_pending = {"text": text[:60].replace("\n", " "), "start": round(start_ms, 1), "start_ts": now, "base": base}
 
@@ -231,7 +230,7 @@ class LatencyTracker:
         now = time.time()
         base = self._tts_pending.get("base")
         if base is None:
-            base = self._llm_start_ts or self._turn_start_ts or now
+            base = self._turn_start_ts or self._llm_start_ts or now
         start_ms = self._tts_pending["start"]
         end_ms = (now - base) * 1000.0
         dur_ms = end_ms - start_ms
