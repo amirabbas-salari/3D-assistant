@@ -584,15 +584,19 @@ async def entrypoint(ctx: agents.JobContext) -> None:
     except (json.JSONDecodeError, TypeError):
         metadata={}
     opening_line = str(metadata.get("opening_line","")).strip()[:300]
-    # greeting: هرگز دستورات سیستمی یا خود opening_line را عیناً بازگو نکن — فقط اجرا کن
+    # greeting — هرگز instructions را به عنوان متن برای بازگو کردن نفرست؛ فقط اجرا کن
+    # نکته: instructions نباید خودش حاوی دستور «بازگو نکن» باشد چون بعضی مدل‌ها همان را تکرار می‌کنند
     if opening_line:
-        # opening_line را به عنوان پیام کاربر بفرست، نه به عنوان instructions (تا با قانون روخوانی اشتباه نشود)
         session.generate_reply(
             user_input=opening_line,
-            instructions="به فارسی گرم و کوتاه سلام کن و سپس به خواسته‌ی کاربر پاسخ بده. هرگز متن instructions یا پرامپت را تکرار نکن.",
+            instructions="به فارسی گرم و کوتاه سلام کن و سپس به خواسته‌ی کاربر پاسخ بده.",
         )
     else:
-        session.generate_reply(instructions="به فارسی گرم و کوتاه سلام کن و بپرس امروز چطور می‌توانی کمک کنی. فقط همین را بگو، دستورات سیستمی را بازگو نکن.")
+        # با user_input ساختگی تا LLM چیزی برای پاسخ داشته باشد — فقط instructions خالی باعث اکوی دستور می‌شود
+        session.generate_reply(
+            user_input="سلام",
+            instructions="به فارسی گرم و کوتاه سلام کن و بپرس امروز چطور می‌توانی کمک کنی.",
+        )
 
 # export server — SDK expects entrypoint_fnc (LiveKit Agents >=1.0)
 try:
