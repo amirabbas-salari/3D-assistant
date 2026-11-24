@@ -279,7 +279,7 @@ async def entrypoint(ctx: agents.JobContext) -> None:
         streaming_desc,
         json.dumps(turn_handling, ensure_ascii=False) if turn_handling else "SDK defaults", fast_start_enabled)
 
-    extra_body = llm_request_body(llm_max_tokens, job_logger)
+    extra_body = llm_request_body(llm_max_tokens, job_logger, model=llm_model)
 
     # هشدار مدل کند: gpt-oss برای voice مناسب نیست (TTFT 1-5s)
     if "gpt-oss" in llm_model.lower():
@@ -303,13 +303,24 @@ async def entrypoint(ctx: agents.JobContext) -> None:
         **({"turn_handling": turn_handling} if turn_handling else {}),
     )
 
-    # Prewarm TTS: اتصال وب‌سوکت را قبل از اولین نوبت باز کن (TTFB کمتر)
-    if hasattr(tts, "prewarm"):
+    # Prewarm TTS: اتصال وب‌سوکت را قبل از اولین نوبت باز کن (TTFB کمتر ~110ms)
+    # TrackedTTS مانع دیدن prewarm روی inner است — هر دو را چک کن
+    _prewarm_targets = [tts]
+    for attr in ("_inner", "tts", "_tts"):
         try:
-            tts.prewarm()  # type: ignore[attr-defined]
-            job_logger.info("TTS prewarm فراخوانی شد")
-        except Exception as e:
-            job_logger.warning("TTS prewarm شکست: %s", e)
+            inner = getattr(tts, attr, None)
+            if inner is not None and inner not in _prewarm_targets:
+                _prewarm_targets.append(inner)
+        except Exception:
+            pass
+    for tgt in _prewarm_targets:
+        if hasattr(tgt, "prewarm"):
+            try:
+                tgt.prewarm()  # type: ignore[attr-defined]
+                job_logger.info("TTS prewarm فراخوانی شد (%s)", type(tgt).__name__)
+                break
+            except Exception as e:
+                job_logger.warning("TTS prewarm شکست: %s", e)
 
     av_provider = avatar_provider()
     if av_provider == "none":
@@ -373,7 +384,12 @@ async def entrypoint(ctx: agents.JobContext) -> None:
     async def publish_assistant_reply_msg(text: str) -> None:
         await publish_room_message(ctx, {"type":"assistant_reply","text":text})
 
-    knowledge_index, knowledge_config = _load_knowledge(job_logger)
+    # RAG load: ممکن است 200-500ms طول بکشد (Chroma + BM25) — به thread offload کن تا event loop بلوکه نشود
+    try:
+        knowledge_index, knowledge_config = await asyncio.to_thread(_load_knowledge, job_logger)
+    except Exception as e:
+        job_logger.warning("RAG load از thread شکست (%s) — fallback مستقیم", e)
+        knowledge_index, knowledge_config = _load_knowledge(job_logger)
     tool_timings: dict[str,float] = {}
     knowledge_tool = _make_knowledge_tool(knowledge_index, knowledge_config, job_logger, tool_timings) if knowledge_index is not None else None
     # نگه‌داشتن پیام preload برای پاکسازی بعد از هر نوبت (جلوگیری از رشد بی‌نهایت context)
@@ -433,6 +449,37 @@ async def entrypoint(ctx: agents.JobContext) -> None:
             latency.record_turn(getattr(item,"metrics",None), reply_text=text, interrupted=bool(getattr(item,"interrupted",False)), stt_model=stt_model, llm_model=llm_model, tts_model=tts_model, tool_ms=dict(tool_timings))
             tool_timings.clear()
             tts_requests["turn"]=0
+            # تاریخچه را محدود کن — هر نوبت ۲ پیام اضافه می‌کند، بعد از ۸ نوبت LLM کند می‌شود
+            try:
+                max_keep = int(os.getenv("AGENT_MAX_HISTORY_ITEMS", "12").strip() or "12")
+                if max_keep > 0 and hasattr(session, "chat_ctx") and session.chat_ctx is not None:
+                    items = getattr(session.chat_ctx, "items", None) or getattr(session.chat_ctx, "messages", None)
+                    if items is not None:
+                        try:
+                            cur_len = len(items)  # type: ignore
+                        except Exception:
+                            cur_len = 0
+                        if cur_len and cur_len > max_keep:
+                            excess = cur_len - max_keep
+                            for _ in range(excess):
+                                try:
+                                    oldest = items[0]  # type: ignore
+                                    # پیام‌های RAG موقت را نگه دار — جداگانه پاک می‌شود
+                                    if oldest is _rag_preload_msg[0]:
+                                        # این را نپران، بعدی را امتحان کن
+                                        if len(items) > 1:
+                                            oldest = items[1]  # type: ignore
+                                        else:
+                                            break
+                                    if hasattr(session.chat_ctx, "remove"):
+                                        session.chat_ctx.remove(oldest)  # type: ignore
+                                    else:
+                                        break
+                                except Exception:
+                                    break
+                            job_logger.info("chat history trimmed %s → %s items (max %s)", cur_len, max_keep, max_keep)
+            except Exception:
+                pass
             asyncio.create_task(publish_latency_msg())
             if text:
                 asyncio.create_task(publish_assistant_reply_msg(text))

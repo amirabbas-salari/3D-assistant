@@ -39,15 +39,60 @@ class PersianAssistant(Agent):
         if selling:
             compact = os.getenv("AGENT_COMPACT_PROMPT", "true").strip().lower() in {"1","true","yes","on"}
             fast_profile = os.getenv("AGENT_SPEED_PROFILE","ultra").strip().lower() in {"ultra","instant","fastest"}
-            if (compact or fast_profile) and len(selling) > 2000:
-                selling = selling[:1800].strip() + "\n\n— نکته: پاسخ کوتاه (۱ جمله + ۱ سوال) و دعوت به بررسی رایگان."
+            # 1800 کاراکتر بخش ۵-۱ (آنالیز ایراد+راه‌حل) را حذف می‌کرد — حد را به ۳۵۰۰ بردیم
+            if (compact or fast_profile) and len(selling) > 3500:
+                selling = selling[:3300].strip() + "\n\n— نکته: پاسخ کوتاه (۱ جمله + ۱ سوال) و دعوت به بررسی رایگان."
             instructions += "\n\nمهارت‌های فروش و مارکتینگ (در همه‌ی گفتگوها رعایت کن):\n" + selling
-        if len(instructions) > 8000:
-            instructions = instructions[:7800] + "\n[truncated]"
+        # آنالیز تخصصی سایت/اینستا — همیشه تزریق می‌شود (حتی اگر sales_playbook کوتاه شود یا RAG خاموش باشد)
+        audit_core = (
+            "\n\n[آنالیز سایت/پیج — بدون آدرس هم ۳ ایراد محتمل بگو + هر ایراد→راه‌حل شرکت]\n"
+            "سایت ۷ چک: سرعت/CoreVitals (>۳s نصف می‌پره), موبایل/CTA, Hero/اعتماد(۵ثانیه), مسیرخرید ۱کلیکه, سئو intent+تکنیکال, کپی متقاعدکننده, SSL/نماد.\n"
+            "اینستا ۷ چک: بایو ۱۵۰کاراکتر+لینک هوشمند, هایلایت ۵تایی, گرید ۹پست ویترین, ریلز هوک۳ثانیه‌ای+کات۱.۵s, استوری روزانه تعاملی, کپشن CTA «کلمه X دایرکت کن», ادز ریتارگت.\n"
+            "قانون: حتی بدون آدرس ۳ ایراد «معمولاً» بگو (قطعیت نه), هر ایراد ۱ جمله + «ما اینو برای X کردیم→نتیجه عددی(مثلا ۴.۲s→۱.۱s, تبدیل۲.۱٪→۴.۳٪, تعامل۲×)» + پایان «آدرس/آیدی یا جلسه ۱۵دقیقه رایگان (۵/هفته)؟» — آموزش قدم‌به‌قدم نده (۲۰٪ چی/چرا, ۸۰٪ اجرا با ما)."
+        )
+        instructions += audit_core
+        if len(instructions) > 8500:
+            instructions = instructions[:8300] + "\n[truncated]"
         super().__init__(instructions=instructions, tools=[knowledge_tool] if (knowledge_tool and use_tool) else [])
 
     async def llm_node(self, chat_ctx, tools, model_settings=None):
-        """حلقه LLM با ثبت مرحله‌ای هر توکن برای گانت چارت"""
+        """حلقه LLM با ثبت مرحله‌ای هر توکن برای گانت چارت + محدودسازی تاریخچه"""
+        # جلوگیری از رشد بی‌نهایت context: هر نوبت توکن‌ها زیاد می‌شود → TTFT خطی بالا می‌رود
+        # chat_ctx را به آخرین N پیام محدود کن (پیش‌فرض 12 = ۶ نوبت)
+        try:
+            max_keep = int(os.getenv("AGENT_MAX_HISTORY_ITEMS", "12").strip() or "12")
+            if max_keep > 0:
+                # LiveKit ChatContext: items یا messages
+                items = None
+                if hasattr(chat_ctx, "items"):
+                    items = getattr(chat_ctx, "items")
+                elif hasattr(chat_ctx, "messages"):
+                    items = getattr(chat_ctx, "messages")
+                if items is not None:
+                    # items می‌تواند list یا dict-like باشد
+                    try:
+                        cur_len = len(items)  # type: ignore
+                    except Exception:
+                        cur_len = 0
+                    if cur_len and cur_len > max_keep:
+                        # قدیمی‌ترین‌ها را حذف کن — فقط user/assistant، system را نگه دار
+                        excess = cur_len - max_keep
+                        # کپی برای حذف امن
+                        to_drop = list(items[:excess])  # type: ignore
+                        for msg in to_drop:
+                            # system پیام‌ها معمولاً role=system دارند — نگهدار اگر فقط یکی است
+                            try:
+                                role = getattr(msg, "role", None)
+                                if role == "system" and cur_len - excess <= 2:
+                                    continue
+                                if hasattr(chat_ctx, "remove"):
+                                    chat_ctx.remove(msg)  # type: ignore
+                                elif hasattr(chat_ctx, "delete"):
+                                    chat_ctx.delete(msg)  # type: ignore
+                            except Exception:
+                                pass
+        except Exception:
+            pass
         tracker = self._latency_tracker
         if tracker is not None:
             try:
