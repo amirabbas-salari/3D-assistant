@@ -713,13 +713,42 @@ async def entrypoint(ctx: agents.JobContext) -> None:
                     json.dumps(turn_handling, ensure_ascii=False, default=str) if turn_handling else "SDK defaults",
                     fast_start_enabled)
 
-    session = AgentSession(
-        stt=stt,
-        llm=_llm,
-        tts=tts,
-        conn_options=session_conn_options,
-        **({"turn_handling": turn_handling} if turn_handling else {}),
-    )
+    # turn_detection: برای فارسی threshold پیش‌فرض 0.3568 خیلی محافظه‌کار است → جملات کوتاه مثل "سلام" با 0.07 رد می‌شوند و max_delay می‌خورند
+    # کاهش threshold به 0.2 باعث می‌شود حتی با 0.3 هم زودتر پایان تشخیص داده شود (بدون دست زدن به min/max)
+    # این تنظیم در کنار max_delay کمتر، میانگین 940ms را به ~300ms می‌رساند
+    turn_detection_kwargs = {}
+    # اگر کاربر override نکرده، برای فارسی/عمومی threshold پایین‌تر بگذار
+    _td_thresh = os.getenv("LIVEKIT_TURN_DETECTOR_THRESHOLD", "").strip()
+    if _td_thresh:
+        try:
+            turn_detection_kwargs["unlikely_threshold"] = float(_td_thresh)
+        except ValueError:
+            pass
+    else:
+        # پیش‌فرض بهینه برای فارسی: 0.2 به جای 0.3568 — در لاگ دیدیم "سلام" با 0.07 هنوز کم است ولی "میخام سایت طراحی کنم" با 0.63 قبول شد
+        # با 0.2 حداقل جملات متوسط سریع‌تر رد می‌شوند؛ جملات خیلی کوتاه اگر باز هم کم بود، max_delay کوتاه (0.6) نجات می‌دهد
+        turn_detection_kwargs["unlikely_threshold"] = 0.2
+
+    session_kwargs = {
+        "stt": stt,
+        "llm": _llm,
+        "tts": tts,
+        "conn_options": session_conn_options,
+    }
+    if turn_handling:
+        session_kwargs["turn_handling"] = turn_handling
+    # turn_detection را فقط اگر SDK پشتیبانی کند اضافه کن (سازگاری با نسخه‌های قدیمی)
+    if turn_detection_kwargs:
+        try:
+            # تست سازگاری: آیا AgentSession turn_detection می‌پذیرد؟
+            import inspect as _inspect
+            if "turn_detection" in _inspect.signature(AgentSession.__init__).parameters:
+                session_kwargs["turn_detection"] = turn_detection_kwargs
+                job_logger.info("Turn detection tuned: %s", turn_detection_kwargs)
+        except Exception:
+            pass
+
+    session = AgentSession(**session_kwargs)
 
     # Prewarm TTS (wrapperها prewarm را به inner می‌رسانند؛ در نسخهٔ قبل هرگز به inner نمی‌رسید)
     try:
