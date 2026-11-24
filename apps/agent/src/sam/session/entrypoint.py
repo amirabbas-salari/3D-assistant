@@ -126,12 +126,12 @@ async def entrypoint(ctx: agents.JobContext) -> None:
             from livekit.agents.tts import StreamAdapter
             from livekit.agents import tokenize as _tok
             # توکنایزر تند فارسی: جمله + بند (روی نقطه، علامت سوال/تعجب و ویرگول فارسی flush کن)
-            class FastPersianTokenizer:
+            class FastPersianTokenizer(_tok.tokenize.SentenceTokenizer if hasattr(_tok, 'tokenize') and hasattr(_tok.tokenize, 'SentenceTokenizer') else object):  # type: ignore
                 def __init__(self, base_tok):
                     self._base = base_tok
                     # کاراکترهایی که پایانِ قابلِ پخش هستند — ویرگول فارسی را هم جزوِ پایان حساب کن
                     self._flush_chars = set(".\n!؟?،؛:;")
-                def tokenize(self, text: str) -> list[str]:
+                def tokenize(self, text: str, *, language: str | None = None) -> list[str]:  # type: ignore[override]
                     # اول با توکنایزر اصلی به جمله‌ها بشکن
                     try:
                         sents = self._base.tokenize(text) if self._base else [text]
@@ -161,8 +161,24 @@ async def entrypoint(ctx: agents.JobContext) -> None:
                         # اگر نشکست، همان جمله
                         out.extend(parts if parts else [s])
                     return out
+                def stream(self, *, language: str | None = None):  # type: ignore[override]
+                    # LiveKit StreamAdapter expects .stream() → SentenceStream
+                    # از BufferedSentenceStream استفاده کن تا قرارداد LiveKit رعایت شود
+                    try:
+                        from livekit.agents.tokenize.token_stream import BufferedSentenceStream
+                        return BufferedSentenceStream(tokenizer=self.tokenize, min_token_len=1, min_ctx_len=10)
+                    except Exception:
+                        # fallback: اگر base دارد stream را deleg کن
+                        try:
+                            if self._base and hasattr(self._base, 'stream'):
+                                return self._base.stream(language=language)
+                        except Exception:
+                            pass
+                        # آخرین fallback: ساده‌ترین استریم
+                        from livekit.agents.tokenize.token_stream import BufferedSentenceStream as _BS
+                        return _BS(tokenizer=self.tokenize, min_token_len=1, min_ctx_len=10)
                 def stream_text(self, text: str):
-                    # LiveKit StreamAdapter می‌تواند tokenize یا stream_text صدا بزند
+                    # سازگاری قدیمی
                     return self.tokenize(text)
 
             try:
