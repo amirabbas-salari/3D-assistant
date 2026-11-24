@@ -1,0 +1,10 @@
+name = "horno-livekit-proxy"
+main = "worker.js"
+compatibility_date = "2024-11-01"
+
+# LiveKit Cloud host (without scheme) — only this host is proxied
+# Set via: wrangler secret put LIVEKIT_HOST or vars
+[vars]
+LIVEKIT_HOST = "horno-avatar-jr68tfeq.livekit.cloud"
+# Comma-separated allowed origins for CORS (or * for public widget)
+ALLOWED_ORIGINS = "*"
