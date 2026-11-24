@@ -486,13 +486,18 @@ class RagIndex:
             raise FileNotFoundError(
                 f"No index at {store_dir}. Build it first: python scripts/build_rag_index.py"
             )
+        # Windows: chroma 0.4→1.0 migration — old store is incompatible (KeyError with path)
+        # Normalize path to forward slashes for chroma's sqlite
         client = chromadb.PersistentClient(path=str(store_dir))
         try:
             col = client.get_collection(collection, embedding_function=LocalEmbedding())
-        except Exception as exc:  # noqa: BLE001 - surface a readable message
+        except FileNotFoundError:
+            raise
+        except Exception as exc:  # noqa: BLE001 - surface readable + handle KeyError from stale index
+            # KeyError: 'J:\\...\\.rag\\chroma' = old format, or chroma version mismatch
             raise FileNotFoundError(
-                f"Collection {collection!r} not found in {store_dir}. "
-                "Build it with: python scripts/build_rag_index.py"
+                f"Collection {collection!r} not found or incompatible in {store_dir} ({type(exc).__name__}: {exc}). "
+                "Delete .rag folder and rebuild: python scripts/build_rag_index.py"
             ) from exc
 
         raw = col.get(include=["documents", "metadatas"])
