@@ -24,8 +24,7 @@ router.get('/health', (_req, res) => {
     ttsProviderLegacy: ttsProvider() === 'direct' ? 'Google Gemini API' : 'LiveKit Inference',
     ttsModel: ttsProvider() === 'openrouter' ? (process.env.OPENROUTER_TTS_MODEL || 'elevenlabs/eleven-v3-conversational') : (process.env.LIVEKIT_TTS_MODEL || 'google/gemini-3.8-flash-lite-tts'),
     ttsVoice: ttsProvider() === 'openrouter' ? (process.env.OPENROUTER_TTS_VOICE || process.env.ELEVENLABS_VOICE_ID || 'george') : (process.env.LIVEKIT_TTS_VOICE || 'Charon'), ttsLanguage: process.env.LIVEKIT_TTS_LANGUAGE || 'fa',
-    livekitConfigured: Boolean((process.env.LIVEKIT_API_URL || process.env.LIVEKIT_URL) && process.env.LIVEKIT_API_KEY && process.env.LIVEKIT_API_SECRET),
-    livekitTtsConfigured: Boolean((process.env.LIVEKIT_API_URL || process.env.LIVEKIT_URL) && process.env.LIVEKIT_API_KEY && process.env.LIVEKIT_API_SECRET),
+    livekitTtsConfigured: Boolean(process.env.LIVEKIT_URL && process.env.LIVEKIT_API_KEY && process.env.LIVEKIT_API_SECRET),
     ragEnabled: /^(1|true|yes|on)$/i.test((process.env.RAG_ENABLED || '').trim()), ragDocsDir: process.env.RAG_DOCS_DIR || 'knowledge', ragTopK: Number(process.env.RAG_TOP_K || 3),
   });
 });

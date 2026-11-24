@@ -12,7 +12,6 @@ import { fetchHealth, createSession, cleanupSessions } from '../api/client.js';
 import { errorMessage, messageTime } from '../lib/utils.js';
 import { formatLatency } from '../lib/latency.js';
 import { createLipSync } from '../lipsync.js';
-import { installLiveKitWsPatch } from '../lib/livekitWsPatch.js';
 
 export default function App() {
   const s = useAppState();
@@ -74,8 +73,6 @@ export default function App() {
   async function startSession() {
     if (s.phase !== 'idle' || s.startingRef.current) return;
     s.startingRef.current = true; s.setPhase('connecting'); addLog('info', 'درخواست ایجاد جلسه ارسال شد');
-    // Install Blob→ArrayBuffer/string patch BEFORE SDK creates WebSocket
-    installLiveKitWsPatch((lvl, msg, det) => addLog(lvl, msg, det));
     let room;
     try {
       const data = await createSession({});
@@ -106,14 +103,7 @@ export default function App() {
 
       room.on(RoomEvent.DataReceived, (payload) => {
         try {
-          // LiveKit DataChannel: payload is Uint8Array per SDK, but be defensive —
-          // never JSON.parse a Blob; Protobuf signaling is handled by livekit-client itself.
-          let bytes;
-          if (payload instanceof Uint8Array) bytes = payload;
-          else if (payload instanceof ArrayBuffer) bytes = new Uint8Array(payload);
-          else if (typeof payload === 'string') bytes = new TextEncoder().encode(payload);
-          else { addLog('warning', 'بسته‌ی داده نوع ناشناس', `type=${Object.prototype.toString.call(payload)}`); return; }
-          const packet = JSON.parse(new TextDecoder().decode(bytes));
+          const packet = JSON.parse(new TextDecoder().decode(payload));
           if (packet.type === 'system_log') addLog(packet.level, packet.message, packet.details || '');
           else if (packet.type === 'user_transcript' && typeof packet.text === 'string') { if (packet.final) { addChat('user', packet.text, 'voice'); s.setDraftTranscript(''); } else s.setDraftTranscript(packet.text); }
           else if (packet.type === 'latency') { s.setLatency(packet); if (packet.last) addLog('info', 'زمان‌بندی نوبت', formatLatency(packet)); }
@@ -132,45 +122,8 @@ export default function App() {
         addLog('warning', 'ترک از اتاق لغو شد', `${participant.identity} · ${track.kind}`);
       });
       room.on(RoomEvent.AudioPlaybackStatusChanged, () => { const blocked = !room.canPlaybackAudio; s.setAudioNeedsGesture(blocked); addLog(blocked ? 'warning' : 'info', blocked ? 'مرورگر پخش خودکار صدا را مسدود کرد' : 'پخش صدا فعال است'); });
-      room.on(RoomEvent.Disconnected, (reason) => {
-        const code = typeof reason === 'number' ? `code=${reason}` : String(reason || 'بدون جزئیات');
-        addLog('warning', 'اتصال LiveKit قطع شد', code);
-      });
-      room.on(RoomEvent.SignalConnected, () => addLog('success', 'سیگنال LiveKit متصل شد'));
-      room.on(RoomEvent.Reconnecting, () => addLog('warning', 'در حال اتصال مجدد سیگنال…'));
-      room.on(RoomEvent.Reconnected, () => addLog('success', 'سیگنال مجدداً متصل شد'));
-      // Diagnostic: sanitized URL, binaryType, SDK version — never log token
-      try {
-        const u = new URL(data.serverUrl);
-        const isWorker = u.hostname.includes('workers.dev');
-        addLog('info', 'اتصال LiveKit', `url=${u.protocol}//${u.host}${u.pathname} worker=${isWorker ? 'yes' : 'direct'} sdk=${Room.version || 'unknown'} binaryType=arraybuffer`);
-      } catch {}
-      const directFallbackUrl = 'wss://horno-avatar-jr68tfeq.livekit.cloud';
-      const isWorkerUrl = (() => { try { return new URL(data.serverUrl).hostname.includes('workers.dev'); } catch { return false; } })();
-      try {
-        await room.connect(data.serverUrl, data.token);
-      } catch (connectErr) {
-        const msg = connectErr instanceof Error ? connectErr.message : String(connectErr);
-        const stack = connectErr instanceof Error ? (connectErr.stack || '') : '';
-        const isBlobJson = msg.includes('[object Blob]') || msg.includes('Unexpected token');
-        if (isBlobJson && isWorkerUrl) {
-          addLog('warning', 'سیگنال Worker ناموفق — تلاش مستقیم', `worker=${data.serverUrl} → fallback=${directFallbackUrl} · msg=${msg.slice(0, 200)}`);
-          try {
-            await room.connect(directFallbackUrl, data.token);
-            addLog('success', 'اتصال مستقیم LiveKit موفق شد', `fallback=${directFallbackUrl} · Worker باید redeploy شود`);
-          } catch (fallbackErr) {
-            const m2 = fallbackErr instanceof Error ? fallbackErr.message : String(fallbackErr);
-            addLog('error', 'سیگنال LiveKit: اتصال ناموفق (مستقیم هم شکست)', `msg=${m2.slice(0, 400)} · stack=${(fallbackErr instanceof Error ? fallbackErr.stack : '').slice(0, 800)}`);
-            throw fallbackErr;
-          }
-        } else {
-          const hint = isBlobJson
-            ? 'Blob→[object Blob] JSON: Worker binaryType≠arraybuffer یا Worker redeploy لازم'
-            : `code=${connectErr?.code || '?'} status=${connectErr?.status || '?'}`;
-          addLog('error', 'سیگنال LiveKit: اتصال ناموفق', `msg=${msg.slice(0, 400)} · ${hint} · stack=${stack.slice(0, 800)}`);
-          throw connectErr;
-        }
-      }
+      room.on(RoomEvent.Disconnected, (reason) => addLog('warning', 'اتصال LiveKit قطع شد', String(reason || 'بدون جزئیات')));
+      await room.connect(data.serverUrl, data.token);
       s.startingRef.current = false; s.setPhase('connected');
       addLog('success', 'به اتاق LiveKit متصل شدیم', `room=${data.roomName || 'unknown'} · agent=${s.health?.agentName || 'configured agent'}`);
       try { await room.localParticipant.setMicrophoneEnabled(true); s.setMicEnabled(true); addLog('success', 'میکروفون فعال شد'); } catch (error) { s.setMicEnabled(false); addLog('warning', 'میکروفون در دسترس نیست؛ چت متنی همچنان فعال است', errorMessage(error)); }

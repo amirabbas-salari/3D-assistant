@@ -45,14 +45,9 @@ export function llmProvider() {
   if (process.env.CLOUDFLARE_API_TOKEN && process.env.CLOUDFLARE_ACCOUNT_ID) return 'cloudflare';
   return 'openrouter';
 }
-export function livekitApiConfigured() {
-  const apiUrl = (process.env.LIVEKIT_API_URL || '').trim();
-  const legacyUrl = (process.env.LIVEKIT_URL || '').trim();
-  return Boolean((apiUrl || legacyUrl) && process.env.LIVEKIT_API_KEY && process.env.LIVEKIT_API_SECRET);
-}
 export function speechConfigured() {
   if (speechProvider() === 'direct') return Boolean(process.env.DEEPGRAM_API_KEY && process.env.GOOGLE_API_KEY);
-  return Boolean(livekitApiConfigured());
+  return Boolean(process.env.LIVEKIT_URL && process.env.LIVEKIT_API_KEY && process.env.LIVEKIT_API_SECRET);
 }
 export function didConfigured() { return Boolean(process.env.DID_API_KEY && process.env.DID_AGENT_ID); }
 export function spatiusConfigured() { return Boolean(process.env.SPATIUS_API_KEY && process.env.SPATIUS_APP_ID && process.env.SPATIUS_AVATAR_ID); }
@@ -61,7 +56,7 @@ export function isConfigured() {
     (process.env.OPENROUTER_API_KEY) ||
     (process.env.CLOUDFLARE_ACCOUNT_ID && process.env.CLOUDFLARE_API_TOKEN)
   );
-  const voice = Boolean(livekitApiConfigured() && hasLlm && speechConfigured());
+  const voice = Boolean(process.env.LIVEKIT_URL && process.env.LIVEKIT_API_KEY && process.env.LIVEKIT_API_SECRET && hasLlm && speechConfigured());
   if (!voice) return false;
   const provider = avatarProvider();
   if (provider === 'none') return true;

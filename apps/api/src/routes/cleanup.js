@@ -2,7 +2,7 @@ import { Router } from 'express';
 import { livekitAPI } from '../lib/livekit.js';
 const router = Router();
 router.post('/sessions/cleanup', async (_req, res) => {
-  if (!((process.env.LIVEKIT_API_URL || process.env.LIVEKIT_URL) && process.env.LIVEKIT_API_KEY && process.env.LIVEKIT_API_SECRET)) return res.status(503).json({ error: 'اطلاعات LiveKit در فایل .env تنظیم نشده است.' });
+  if (!(process.env.LIVEKIT_URL && process.env.LIVEKIT_API_KEY && process.env.LIVEKIT_API_SECRET)) return res.status(503).json({ error: 'اطلاعات LiveKit در فایل .env تنظیم نشده است.' });
   try {
     const api = livekitAPI();
     const rooms = await api.room.listRooms();
