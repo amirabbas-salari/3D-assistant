@@ -11,7 +11,7 @@ import logging
 # Defaults
 DEFAULT_CLOUDFLARE_MODEL = "@cf/meta/llama-3.3-70b-instruct-fp8-fast"
 DEFAULT_OPENROUTER_MODEL = "openai/gpt-4o-mini"  # fast, cheap, good Persian + tool-calling; alternatives: meta-llama/llama-3.3-70b-instruct, google/gemini-2.0-flash-001
-DEFAULT_MAX_TOKENS = 150
+DEFAULT_MAX_TOKENS = 90  # گانت قبلی 107 توکن (3.47s) → خیلی طولانی؛ برای 2 جمله + سوال 70-90 کافیست (TTFT کمتر، TTS زودتر)
 
 
 def llm_provider() -> str:

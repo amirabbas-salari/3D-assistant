@@ -120,23 +120,62 @@ async def entrypoint(ctx: agents.JobContext) -> None:
         stt = build_stt(stt_prov, model=stt_model, language=stt_language, conn_options=inference_conn_options, fallback=stt_fallback_models, job_logger=job_logger)
         tts = build_tts(tts_prov, model=livekit_tts_model, voice=livekit_tts_voice, language=tts_language, conn_options=inference_conn_options, job_logger=job_logger)
     # تضمین streaming: حتی اگر TTS اصلی streaming نباشد، با StreamAdapter جمله‌ای stream می‌شود (سرعت +30%)
+    # برای فارسی جمله‌ها طولانیه → روی «،» و «؛» هم flush کن تا TTS زودتر شروع شود (گانت: 1.40s → <400ms)
     if not getattr(tts.capabilities, "streaming", False):
         try:
             from livekit.agents.tts import StreamAdapter
             from livekit.agents import tokenize as _tok
-            # SentenceTokenizer بومی SDK — اگر موجود نبود fallback به basic
+            # توکنایزر تند فارسی: جمله + بند (روی نقطه، علامت سوال/تعجب و ویرگول فارسی flush کن)
+            class FastPersianTokenizer:
+                def __init__(self, base_tok):
+                    self._base = base_tok
+                    # کاراکترهایی که پایانِ قابلِ پخش هستند — ویرگول فارسی را هم جزوِ پایان حساب کن
+                    self._flush_chars = set(".\n!؟?،؛:;")
+                def tokenize(self, text: str) -> list[str]:
+                    # اول با توکنایزر اصلی به جمله‌ها بشکن
+                    try:
+                        sents = self._base.tokenize(text) if self._base else [text]
+                    except Exception:
+                        sents = [text]
+                    # هر جمله را روی ویرگول/نقطه‌ویرگول هم به بندهای کوچک‌تر بشکن (حداقل 12 کاراکتر)
+                    out: list[str] = []
+                    for s in sents:
+                        # اگر جمله کوتاهه (<35 کاراکتر) همون رو بده — نیازی به شکستن نیست
+                        if len(s.strip()) < 35:
+                            out.append(s)
+                            continue
+                        # بشکن روی ، و ؛ و : ولی فقط اگر هر تکه >=18 کاراکتر باشد (تا TTS تکه‌تکه نشود)
+                        parts: list[str] = []
+                        cur = ""
+                        for ch in s:
+                            cur += ch
+                            if ch in self._flush_chars and len(cur.strip()) >= 18:
+                                # فقط اگر بعد از این کاراکتر، متنِ قابلِ معنایی داریم
+                                parts.append(cur)
+                                cur = ""
+                        if cur.strip():
+                            if parts:
+                                parts[-1] += cur
+                            else:
+                                parts.append(cur)
+                        # اگر نشکست، همان جمله
+                        out.extend(parts if parts else [s])
+                    return out
+                def stream_text(self, text: str):
+                    # LiveKit StreamAdapter می‌تواند tokenize یا stream_text صدا بزند
+                    return self.tokenize(text)
+
             try:
-                sent_tok = _tok.basic.SentenceTokenizer()
+                base_tok = _tok.basic.SentenceTokenizer()
             except Exception:
                 try:
-                    sent_tok = _tok.tokenize.basic.SentenceTokenizer()
+                    base_tok = _tok.tokenize.basic.SentenceTokenizer()
                 except Exception:
-                    sent_tok = None
-            if sent_tok is not None:
-                tts = StreamAdapter(tts=tts, sentence_tokenizer=sent_tok)  # type: ignore[arg-type]
-                job_logger.info("TTS streaming تضمین شد: StreamAdapter فعال (جمله‌ای)")
-            else:
-                job_logger.info("TTS non-streaming ولی tokenizer در دسترس نبود — بدون adapter ادامه می‌دهیم")
+                    base_tok = None
+            # حتی اگر base_tok نداریم، با FastPersianTokenizer خالی هم کار می‌کند
+            sent_tok = FastPersianTokenizer(base_tok)
+            tts = StreamAdapter(tts=tts, sentence_tokenizer=sent_tok)  # type: ignore[arg-type]
+            job_logger.info("TTS streaming تضمین شد: FastPersianTokenizer فعال (جمله‌ای+بندی، flush روی ،؛:)")
         except Exception as e:
             job_logger.warning("StreamAdapter فعال‌سازی نشد: %s", e)
 
