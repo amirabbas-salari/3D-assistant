@@ -5,28 +5,30 @@ Uses OpenRouter's OpenAI-compatible endpoint:
   { model: "<OPENROUTER_TTS_MODEL>", input: "text", voice: "...", response_format: "mp3" }
 → raw audio bytes
 
-Supports switching model with only:
-  OPENROUTER_TTS_MODEL=openai/tts-1
-  OPENROUTER_TTS_MODEL=google/gemini-2.5-flash-tts
-  OPENROUTER_TTS_MODEL=elevenlabs/eleven-v3-conversational
-  OPENROUTER_TTS_MODEL=minimax/minimax-speech-02-hd
-etc. Voice/response_format are optional per model.
-
-Docs: https://openrouter.ai/docs/guides/overview/multimodal/tts
+تغییرات نسبت به نسخهٔ قبل (همه برای کاهش تأخیر / پایداری):
+  * بدنهٔ پاسخ استریم می‌شود (client.stream + aiter_bytes) و هر تکه بلافاصله به emitter می‌رسد؛
+    قبلاً کل mp3 جمله باید کامل دانلود می‌شد تا اولین صدا پخش شود.
+  * timeout از conn_options خوانده می‌شود (قبلاً read=30s ثابت بود و FallbackAdapter/Session
+    تا ۳۰ ثانیه منتظر یک درخواست گیرکرده می‌ماند).
+  * keepalive_expiry=120s (پیش‌فرض httpx فقط ۵ ثانیه است؛ یعنی تقریباً هر نوبت یک TLS handshake جدید).
+  * prewarm(): اتصال TLS قبل از اولین نوبت گرم می‌شود.
+  * اگر بعد از ارسال بخشی از صدا خطا شد، retry نمی‌شود (جلوگیری از پخش دوبارهٔ صدا).
+  * پاسخ ۲۰۰ با content-type غیرصوتی (JSON خطا) به‌جای ورود به دیکودر mp3 خطای تمیز می‌دهد.
 """
 
 from __future__ import annotations
 
-import os
+import asyncio
 import json as _json
+import logging
+import os
 
-try:
-    import httpx as _httpx  # type: ignore
-except ImportError:
-    import httpx2 as _httpx  # type: ignore
+import httpx as _httpx
 
 from livekit.agents import APIConnectionError, APIStatusError, APITimeoutError, tts
 from livekit.agents.types import DEFAULT_API_CONNECT_OPTIONS, APIConnectOptions
+
+logger = logging.getLogger("sam.speech.openrouter_tts")
 
 SAMPLE_RATE = 24000
 NUM_CHANNELS = 1
@@ -61,6 +63,8 @@ _LEGACY_VOICE_MAP = {
     "XB0fDUnXU5powFXDhCwa": "charlotte",
 }
 
+_AUDIO_MIME = {"audio/mpeg", "audio/mp3", "audio/ogg", "audio/opus", "audio/wav", "audio/webm", "audio/pcm"}
+
 
 def _normalize_voice(voice: str, model: str) -> str | None:
     """Return normalized voice or None if not needed.
@@ -68,14 +72,12 @@ def _normalize_voice(voice: str, model: str) -> str | None:
     """
     v = (voice or "").strip()
     if not v:
-        # No voice specified — only default for elevenlabs family for backward compat
         if "elevenlabs" in model.lower():
             return "george"
         return None
     if v in _LEGACY_VOICE_MAP:
         return _LEGACY_VOICE_MAP[v]
     if len(v) > 18 and v.isalnum():
-        # Looks like legacy ID, map to george for elevenlabs else drop
         return "george" if "elevenlabs" in model.lower() else None
     return v.lower().strip()
 
@@ -100,24 +102,17 @@ class OpenRouterTTS(tts.TTS):
             num_channels=NUM_CHANNELS,
         )
         self._api_key = (api_key or os.getenv("OPENROUTER_API_KEY", "")).strip()
+        if not self._api_key:
+            raise RuntimeError("OPENROUTER_API_KEY is required for TTS_PROVIDER=openrouter (https://openrouter.ai/settings/keys)")
+
         self._base_url = (base_url or os.getenv("OPENROUTER_BASE_URL", DEFAULT_BASE_URL)).strip() or DEFAULT_BASE_URL
         self._base_url = self._base_url.rstrip("/")
         self._model = (model or os.getenv("OPENROUTER_TTS_MODEL", DEFAULT_MODEL)).strip() or DEFAULT_MODEL
-        # Warn if model looks invalid — fish-audio/drama-3 → fish-audio/fish-speech-1.5
         if self._model == "fish-audio/drama-3":
-            # Common mistake: drama-3 is not on OpenRouter
-            import logging
-            logging.getLogger("sam.speech.openrouter_tts").warning(
-                "OPENROUTER_TTS_MODEL=fish-audio/drama-3 not on OpenRouter (400). Did you mean fish-audio/fish-speech-1.5? See https://openrouter.ai/models?fmt=audio"
-            )
+            logger.warning("OPENROUTER_TTS_MODEL=fish-audio/drama-3 not on OpenRouter (400). Did you mean fish-audio/fish-speech-1.5? See https://openrouter.ai/models?fmt=audio")
         if self._model not in KNOWN_TTS_MODELS:
-            import logging
-            # Still allow custom models, just log hint
-            logging.getLogger("sam.speech.openrouter_tts").info(
-                "OPENROUTER_TTS_MODEL=%s not in known list, will try anyway (if 400, check https://openrouter.ai/models?fmt=audio)", self._model
-            )
+            logger.info("OPENROUTER_TTS_MODEL=%s not in known list, will try anyway (if 400, check https://openrouter.ai/models?fmt=audio)", self._model)
 
-        # Voice — generic: any model can have voice, but don't force it
         raw_voice = (
             (voice or "").strip()
             or os.getenv("OPENROUTER_TTS_VOICE", "").strip()
@@ -126,7 +121,6 @@ class OpenRouterTTS(tts.TTS):
         )
         self._voice = _normalize_voice(raw_voice, self._model)
 
-        # Response format — let user control, normalize common aliases
         fmt = (
             (response_format or "").strip()
             or os.getenv("OPENROUTER_TTS_RESPONSE_FORMAT", "").strip()
@@ -143,30 +137,27 @@ class OpenRouterTTS(tts.TTS):
         self._x_title = (x_title or os.getenv("OPENROUTER_X_TITLE", "")).strip() or None
 
         # Generic extra params via JSON env (e.g. speed, language, instructions)
-        # OPENROUTER_TTS_EXTRA='{"speed": 1.0, "language": "fa"}'
         self._extra_params: dict = {}
         if extra_params:
-            self._extra_params = extra_params
+            self._extra_params = dict(extra_params)
         else:
             extra_raw = os.getenv("OPENROUTER_TTS_EXTRA", "").strip()
             if extra_raw:
                 try:
                     self._extra_params = _json.loads(extra_raw)
-                except Exception:
-                    pass
-            # Also support instructions/prompt for models like openai/gpt-4o-mini-tts
+                except Exception as e:
+                    logger.warning("OPENROUTER_TTS_EXTRA is not valid JSON (%s) — ignored", e)
             instr = os.getenv("OPENROUTER_TTS_INSTRUCTIONS", "").strip()
             if instr:
                 self._extra_params["instructions"] = instr
 
-        if not self._api_key:
-            raise RuntimeError("OPENROUTER_API_KEY is required for TTS_PROVIDER=openrouter (https://openrouter.ai/settings/keys)")
-
+        # keepalive_expiry پیش‌فرض httpx = 5s است → بین نوبت‌های مکالمه اتصال بسته می‌شد
         self._http = _httpx.AsyncClient(
-            timeout=_httpx.Timeout(connect=15.0, read=30.0, write=10.0, pool=10.0),
+            timeout=_httpx.Timeout(connect=10.0, read=30.0, write=10.0, pool=10.0),  # per-request override می‌شود
             follow_redirects=True,
-            limits=_httpx.Limits(max_connections=20, max_keepalive_connections=10),
+            limits=_httpx.Limits(max_connections=20, max_keepalive_connections=10, keepalive_expiry=120.0),
         )
+        self._warm_task: asyncio.Task | None = None
 
     @property
     def model(self) -> str:
@@ -176,10 +167,27 @@ class OpenRouterTTS(tts.TTS):
     def provider(self) -> str:
         return "openrouter"
 
+    def prewarm(self) -> None:
+        """TLS handshake را قبل از اولین نوبت انجام بده (فقط داخل event loop کار می‌کند)."""
+        try:
+            loop = asyncio.get_running_loop()
+        except RuntimeError:
+            return
+        if self._warm_task is None or self._warm_task.done():
+            self._warm_task = loop.create_task(self._warm())
+
+    async def _warm(self) -> None:
+        try:
+            await self._http.head(self._base_url, timeout=3.0)
+        except Exception:
+            pass
+
     def synthesize(self, text: str, *, conn_options: APIConnectOptions = DEFAULT_API_CONNECT_OPTIONS) -> tts.ChunkedStream:
         return OpenRouterChunkedStream(tts=self, input_text=text, conn_options=conn_options)
 
     async def aclose(self) -> None:
+        if self._warm_task is not None and not self._warm_task.done():
+            self._warm_task.cancel()
         await self._http.aclose()
 
 
@@ -187,6 +195,11 @@ class OpenRouterChunkedStream(tts.ChunkedStream):
     def __init__(self, *, tts: OpenRouterTTS, input_text: str, conn_options: APIConnectOptions) -> None:
         super().__init__(tts=tts, input_text=input_text, conn_options=conn_options)
         self._tts: OpenRouterTTS = tts  # type: ignore
+
+    def _request_timeout(self) -> _httpx.Timeout:
+        t = float(getattr(self._conn_options, "timeout", 10.0) or 10.0)
+        # read = فاصلهٔ بین دو تکهٔ بایت (شامل انتظار برای اولین بایت)
+        return _httpx.Timeout(connect=min(5.0, t), read=t, write=min(10.0, t), pool=min(5.0, t))
 
     async def _run(self, output_emitter: tts.AudioEmitter) -> None:
         text = self.input_text.strip()
@@ -201,10 +214,8 @@ class OpenRouterChunkedStream(tts.ChunkedStream):
             "input": text,
             "response_format": self._tts._response_format,
         }
-        # Only send voice if model needs it (elevenlabs, openai tts, etc.)
         if self._tts._voice:
             payload["voice"] = self._tts._voice
-        # Merge generic extra params (speed, language, instructions, etc.)
         if self._tts._extra_params:
             payload.update(self._tts._extra_params)
 
@@ -214,45 +225,58 @@ class OpenRouterChunkedStream(tts.ChunkedStream):
         if self._tts._x_title:
             headers["X-Title"] = self._tts._x_title
 
+        pushed = False
         try:
-            resp = await self._tts._http.post(url, json=payload, headers=headers)
+            async with self._tts._http.stream("POST", url, json=payload, headers=headers, timeout=self._request_timeout()) as resp:
+                request_id = resp.headers.get("x-generation-id", "") or resp.headers.get("x-request-id", "") or ""
+
+                if resp.status_code != 200:
+                    body = (await resp.aread()).decode("utf-8", "replace")
+                    raise APIStatusError(
+                        f"OpenRouter TTS HTTP {resp.status_code} model={self._tts._model}: {body[:800]}",
+                        status_code=resp.status_code,
+                        request_id=request_id,
+                        body=body,
+                    )
+
+                ct = resp.headers.get("content-type", "").split(";")[0].strip().lower()
+                if "json" in ct or ct.startswith("text/"):
+                    body = (await resp.aread()).decode("utf-8", "replace")
+                    raise APIStatusError(
+                        f"OpenRouter TTS returned non-audio content-type '{ct}' model={self._tts._model}: {body[:800]}",
+                        status_code=502,
+                        request_id=request_id,
+                        body=body,
+                    )
+
+                if ct in _AUDIO_MIME:
+                    mime_type = ct
+                elif self._tts._response_format == "pcm":
+                    mime_type = "audio/pcm"
+                else:
+                    mime_type = "audio/mpeg"
+
+                output_emitter.initialize(
+                    request_id=request_id,
+                    sample_rate=self._tts.sample_rate,
+                    num_channels=NUM_CHANNELS,
+                    mime_type=mime_type,
+                    stream=False,
+                )
+                async for chunk in resp.aiter_bytes():
+                    if chunk:
+                        output_emitter.push(chunk)   # صدا همین‌جا شروع به دیکود/پخش می‌کند
+                        pushed = True
+
+            if not pushed:
+                raise APIStatusError("OpenRouter TTS returned empty audio", status_code=502, request_id="", body="")
+            output_emitter.flush()
+
         except _httpx.TimeoutException as e:
-            raise APITimeoutError() from e
-        except Exception as e:
-            raise APIConnectionError() from e
-
-        if resp.status_code != 200:
-            try:
-                body = resp.text
-            except Exception:
-                body = ""
-            raise APIStatusError(
-                f"OpenRouter TTS HTTP {resp.status_code} model={self._tts._model}: {body[:800]}",
-                status_code=resp.status_code,
-                request_id=resp.headers.get("x-request-id", "") or resp.headers.get("x-generation-id", ""),
-                body=body,
-            )
-
-        audio_bytes = resp.content
-        if not audio_bytes:
-            raise APIStatusError("OpenRouter TTS returned empty audio", status_code=200, request_id="", body="")
-
-        ct = resp.headers.get("content-type", "").split(";")[0].strip().lower()
-        if ct in {"audio/mpeg", "audio/mp3", "audio/ogg", "audio/opus", "audio/wav", "audio/webm", "audio/pcm"}:
-            mime_type = ct
-        elif self._tts._response_format == "mp3":
-            mime_type = "audio/mpeg"
-        elif self._tts._response_format == "pcm":
-            mime_type = "audio/pcm"
-        else:
-            mime_type = "audio/mpeg"
-
-        output_emitter.initialize(
-            request_id=resp.headers.get("x-generation-id", "") or resp.headers.get("x-request-id", "") or "",
-            sample_rate=self._tts.sample_rate,
-            num_channels=NUM_CHANNELS,
-            mime_type=mime_type,
-            stream=False,
-        )
-        output_emitter.push(audio_bytes)
-        output_emitter.flush()
+            err = APITimeoutError()
+            err.retryable = not pushed      # بعد از پخش بخشی از صدا retry = صدای تکراری
+            raise err from e
+        except _httpx.HTTPError as e:
+            err = APIConnectionError()
+            err.retryable = not pushed
+            raise err from e

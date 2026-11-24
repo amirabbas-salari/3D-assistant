@@ -1,28 +1,70 @@
-"""Main LiveKit entrypoint — wired from modular config/speech/avatar/rag."""
-import asyncio, json, logging, os, time
+"""Main LiveKit entrypoint — wired from modular config/speech/avatar/rag.
+
+نسخهٔ بازنویسی‌شده با تمرکز روی کمترین تأخیر:
+  * RAG: لود در prewarm (قبل از اختصاص job)، جستجو در thread، شروع زودهنگام روی
+    final transcript (هم‌زمان با endpointing) و تزریق در on_user_turn_completed (قبل از LLM)
+  * ساخت هم‌زمان STT/TTS/LLM/RAG (به‌جای ترتیبی)
+  * کلاینت LLM اختصاصی: max_retries=0، connection pool گرم، timeout قابل تنظیم
+  * TrackedTTS درست: forward رویدادهای metrics/error، prewarm، aclose، model/provider
+  * توکنایزر فارسی مستقل (بدون وابستگی به توکنایزر انگلیسی SDK)
+  * برش تاریخچه به‌صورت دسته‌ای و از مسیر درست (agent.update_chat_ctx)
+  * greeting ثابت بدون LLM (session.say)
+  * throttle انتشار transcriptهای interim
+"""
+from __future__ import annotations
+
+import asyncio
+import json
+import logging
+import os
+import threading
+import time
+from dataclasses import dataclass
+from typing import Any, Awaitable, Callable
+
+import httpx
+import openai as openai_sdk
 from livekit import agents, rtc
-from livekit.agents import APIConnectOptions, AgentSession, RoomOutputOptions, SessionConnectOptions, inference
-from livekit.plugins import openai
+from livekit.agents import APIConnectOptions, AgentSession, RoomOutputOptions, SessionConnectOptions
+from livekit.agents import llm as lk_llm
+from livekit.agents import tts as tts_api
+from livekit.agents.types import DEFAULT_API_CONNECT_OPTIONS
+from livekit.plugins import openai as lk_openai
 
 from ..config.env import flag
-from ..config.llm import llm_request_body, llm_provider, llm_model as resolve_llm_model, llm_max_tokens as resolve_llm_max_tokens, llm_api_key as resolve_llm_api_key, llm_base_url as resolve_llm_base_url, llm_extra_headers, validate_llm_config
+from ..config.llm import (
+    llm_request_body,
+    llm_api_key as resolve_llm_api_key,
+    llm_max_tokens as resolve_llm_max_tokens,
+    llm_extra_headers,
+    validate_llm_config,
+)
 from ..config.speed import speed_profile
-from ..speech.providers import speech_provider, stt_provider, tts_provider, validate_speech_config
+from ..speech.providers import stt_provider, tts_provider
 from ..speech.stt import build_stt, build_tts
 from ..avatar.provider import avatar_provider
 from ..avatar.manager import start_avatar
 from ..assistant.agent import PersianAssistant
+from ..assistant.prompt import assistant_name, sales_prompt
 from ..rag.tools import _load_knowledge, _make_knowledge_tool, _rag_preload
 from ..utils.logging import RoomLogHandler
 from .publish import publish_room_message
+
 try:
     from ..latency.tracker import LatencyTracker
 except ImportError:
     from latency import LatencyTracker  # type: ignore
 
+try:  # توکنایزر استریم SDK — اگر در این نسخه نبود، StreamAdapter فارسی غیرفعال می‌شود
+    from livekit.agents.tokenize.token_stream import BufferedSentenceStream
+    from livekit.agents.tokenize import SentenceTokenizer as _SentenceTokenizerBase
+except Exception:  # pragma: no cover
+    BufferedSentenceStream = None  # type: ignore
+    _SentenceTokenizerBase = object  # type: ignore
+
 logger = logging.getLogger("sam.session.entrypoint")
 
-# Prewarm heavy imports — avoids 1s+ SSL blocks on first use (see log: click.termui → ssl.create_default_context)
+# Prewarm heavy imports — avoids 1s+ SSL blocks on first use
 try:
     import click.types  # noqa: F401
 except Exception:
@@ -33,21 +75,461 @@ for _n in ("chromadb", "chromadb.config", "chromadb.telemetry.posthog"):
     except Exception:
         pass
 
+
+# ───────────────────────────── env / settings ─────────────────────────────
+
+_TRUE = {"1", "true", "yes", "on"}
+_FALSE = {"0", "false", "no", "off", ""}
+
+
+def _env_str(name: str, default: str = "") -> str:
+    return (os.getenv(name) or default).strip()
+
+
+def _env_bool(name: str, default: bool = False) -> bool:
+    v = os.getenv(name)
+    return default if v is None else v.strip().lower() in _TRUE
+
+
+def _env_not_off(name: str, default: bool = True) -> bool:
+    v = os.getenv(name)
+    return default if v is None else v.strip().lower() not in _FALSE
+
+
+def _env_int(name: str, default: int) -> int:
+    try:
+        return int(_env_str(name, str(default)))
+    except ValueError:
+        return default
+
+
+def _env_float(name: str, default: float) -> float:
+    try:
+        return float(_env_str(name, str(default)))
+    except ValueError:
+        return default
+
+
+@dataclass(frozen=True)
+class Settings:
+    """همهٔ env ها یک بار در شروع job خوانده می‌شوند (نه در مسیر داغ هر نوبت)."""
+    stt_model: str
+    stt_language: str
+    stt_fallback: tuple
+    tts_model: str
+    tts_voice: str
+    tts_language: str
+    rag_preload: bool
+    rag_timeout: float
+    max_history: int
+    history_slack: int
+    interim_publish_s: float
+    greeting_mode: str          # "say" (بدون LLM) | "llm"
+    greeting_text: str
+    room_log_level: int
+    llm_read_timeout: float
+    inf_retry: int
+    inf_interval: float
+    inf_timeout: float
+    llm_retry: int
+    llm_interval: float
+    llm_timeout: float
+    max_unrecoverable: int
+
+    @classmethod
+    def from_env(cls) -> "Settings":
+        voice = _env_str("LIVEKIT_TTS_VOICE", "Charon") or "Charon"
+        return cls(
+            stt_model=_env_str("LIVEKIT_STT_MODEL", "deepgram/nova-3"),
+            stt_language=_env_str("LIVEKIT_STT_LANGUAGE", "fa"),
+            stt_fallback=tuple(i.strip() for i in os.getenv("LIVEKIT_STT_FALLBACK", "").split(",") if i.strip()),
+            tts_model=_env_str("LIVEKIT_TTS_MODEL", "google/gemini-3.8-flash-lite-tts"),
+            tts_voice=voice,
+            tts_language=_env_str("LIVEKIT_TTS_LANGUAGE", "fa") or "fa",
+            rag_preload=_env_bool("RAG_PRELOAD") or not _env_bool("RAG_TOOL_ENABLED"),
+            rag_timeout=_env_float("RAG_PRELOAD_TIMEOUT", 0.8),
+            max_history=_env_int("AGENT_MAX_HISTORY_ITEMS", 12),
+            history_slack=_env_int("AGENT_HISTORY_TRIM_SLACK", 6),
+            interim_publish_s=_env_float("INTERIM_PUBLISH_INTERVAL", 0.15),
+            greeting_mode=_env_str("AGENT_GREETING_MODE", "say").lower(),
+            greeting_text=_env_str("AGENT_GREETING_TEXT", "سلام! امروز چطور می‌تونم کمکتون کنم؟"),
+            room_log_level=getattr(logging, _env_str("ROOM_LOG_LEVEL", "INFO").upper(), logging.INFO),
+            llm_read_timeout=_env_float("LLM_READ_TIMEOUT", 8.0),
+            inf_retry=_env_int("LIVEKIT_INFERENCE_MAX_RETRY", 3),
+            inf_interval=_env_float("LIVEKIT_INFERENCE_RETRY_INTERVAL", 1.0),
+            inf_timeout=_env_float("LIVEKIT_INFERENCE_TIMEOUT", 8.0),
+            llm_retry=_env_int("LIVEKIT_LLM_MAX_RETRY", 2),
+            llm_interval=_env_float("LIVEKIT_LLM_RETRY_INTERVAL", 0.8),
+            llm_timeout=_env_float("LIVEKIT_LLM_TIMEOUT", 10.0),
+            max_unrecoverable=_env_int("LIVEKIT_MAX_UNRECOVERABLE_ERRORS", 8),
+        )
+
+
+# ───────────────────────────── RAG ─────────────────────────────
+
+def _norm(text: str) -> str:
+    return " ".join((text or "").split())
+
+
+def _consume_task_result(t: "asyncio.Future") -> None:
+    # جلوگیری از هشدار "Task exception was never retrieved"
+    if not t.cancelled():
+        t.exception()
+
+
+class RagPrefetcher:
+    """جستجوی RAG در thread، با شروع زودهنگام روی final transcript.
+
+    زمان بین «final transcript» و «تأیید پایان نوبت» (endpointing) معمولاً صدها میلی‌ثانیه است؛
+    جستجو در همین بازه اجرا می‌شود و وقتی hook قبل از LLM صدا زده می‌شود نتیجه آماده است.
+    """
+
+    def __init__(self, index: Any, config: Any, log: logging.Logger, timings: dict, *, enabled: bool, timeout: float):
+        self._index, self._config, self._log, self._timings = index, config, log, timings
+        self.enabled = bool(enabled and index is not None)
+        self._timeout = timeout
+        self._lock = threading.Lock()          # Chroma/BM25 را هم‌زمان صدا نزن
+        self._task: asyncio.Task | None = None
+        self._query = ""
+        self._acc = ""
+
+    def _search(self, query: str):
+        with self._lock:
+            return _rag_preload(query, self._index, self._config, self._log, self._timings)
+
+    def _start(self, query: str) -> asyncio.Task:
+        task = asyncio.create_task(asyncio.to_thread(self._search, query))
+        task.add_done_callback(_consume_task_result)
+        self._task, self._query = task, query
+        return task
+
+    def reset(self) -> None:
+        self._task, self._query, self._acc = None, "", ""
+
+    def on_final_transcript(self, text: str) -> None:
+        if not self.enabled:
+            return
+        self._acc = _norm(f"{self._acc} {text}")
+        if self._acc and self._acc != self._query:
+            self._start(self._acc)
+
+    async def get(self, text: str) -> str | None:
+        if not self.enabled:
+            return None
+        q = _norm(text)
+        if not q:
+            return None
+        task = self._task if (self._task is not None and self._query == q) else None
+        prefetched = task is not None
+        if task is None:
+            task = self._start(q)
+        self.reset()
+        t0 = time.perf_counter()
+        try:
+            res = await asyncio.wait_for(asyncio.shield(task), timeout=self._timeout)
+            self._log.info("RAG ready (prefetched=%s, waited=%dms, %d chars)", prefetched,
+                           (time.perf_counter() - t0) * 1000, len(res or ""))
+            return res or None
+        except asyncio.TimeoutError:
+            self._log.warning("RAG timeout (%.2fs) — answering without knowledge", self._timeout)
+        except Exception as e:
+            self._log.warning("RAG preload failed: %s", e)
+        return None
+
+
+class RagAssistant(PersianAssistant):
+    """RAG را قبل از فراخوانی LLM و فقط برای همین نوبت تزریق می‌کند (turn_ctx موقت است)."""
+
+    def __init__(self, *, knowledge_tool: Any, latency_tracker: Any, rag: RagPrefetcher):
+        super().__init__(knowledge_tool=knowledge_tool, latency_tracker=latency_tracker)
+        self._rag_prefetcher = rag
+
+    async def on_user_turn_completed(self, turn_ctx: lk_llm.ChatContext, new_message: lk_llm.ChatMessage) -> None:
+        await super().on_user_turn_completed(turn_ctx, new_message)
+        text = (new_message.text_content or "").strip()
+        if not text:
+            return
+        ctx_text = await self._rag_prefetcher.get(text)
+        if ctx_text:
+            turn_ctx.add_message(role="system", content=f"دانش مرتبط (از پایگاه شرکت):\n{ctx_text}")
+
+
+# ───────────────────────────── Persian TTS tokenizer ─────────────────────────────
+
+_HARD_END = frozenset(".!?؟…\n")
+_SOFT_END = frozenset("،؛:;,")
+
+
+def _split_persian(text: str, min_hard: int = 6, min_soft: int = 24) -> list[str]:
+    """متن را به تکه‌های قابل‌پخش می‌شکند؛ concat تکه‌ها دقیقاً برابر ورودی است.
+
+    * پایان قطعی: . ! ? ؟ … و newline  (حداقل min_hard کاراکتر)
+    * پایان نرم: ، ؛ : ; ,           (حداقل min_soft کاراکتر)
+    * علامت فقط وقتی مرز حساب می‌شود که بعدش فاصله بیاید (3.5 و 10:30 نشکند)
+    """
+    n = len(text)
+    tokens: list[str] = []
+    start = 0
+    i = 0
+    while i < n:
+        ch = text[i]
+        hard = ch in _HARD_END
+        if hard or ch in _SOFT_END:
+            nxt = text[i + 1] if i + 1 < n else " "
+            if ch == "\n" or nxt.isspace():
+                j = i + 1
+                while j < n and text[j].isspace():
+                    j += 1
+                if len(text[start:i + 1].strip()) >= (min_hard if hard else min_soft):
+                    tokens.append(text[start:j])
+                    start = j
+                i = j
+                continue
+        i += 1
+    if start < n:
+        tokens.append(text[start:])
+    return tokens
+
+
+class FastPersianTokenizer(_SentenceTokenizerBase):  # type: ignore[misc,valid-type]
+    def __init__(self, *, min_hard: int = 6, min_soft: int = 24, min_token_len: int = 10, min_ctx_len: int = 10):
+        super().__init__()
+        self._min_hard, self._min_soft = min_hard, min_soft
+        self._min_token_len, self._min_ctx_len = min_token_len, min_ctx_len
+
+    def _fn(self, text: str) -> list[str]:
+        return _split_persian(text, self._min_hard, self._min_soft)
+
+    def tokenize(self, text: str, *, language: str | None = None) -> list[str]:  # type: ignore[override]
+        return self._fn(text)
+
+    def stream(self, *, language: str | None = None):  # type: ignore[override]
+        return BufferedSentenceStream(tokenizer=self._fn, min_token_len=self._min_token_len, min_ctx_len=self._min_ctx_len)
+
+
+# ───────────────────────────── TTS tracking wrapper ─────────────────────────────
+
+class TrackedTTS(tts_api.TTS):
+    """Wrapper برای ثبت سگمنت‌های TTS در گانت.
+
+    نکات مهم نسبت به نسخهٔ قبل: رویدادهای metrics/error داخلی به wrapper forward می‌شوند
+    (وگرنه session هرگز خطای TTS و tts_metrics نمی‌بیند)، prewarm/aclose به inner می‌رسد.
+    """
+
+    def __init__(self, inner: tts_api.TTS, tracker: Any, log: logging.Logger):
+        super().__init__(capabilities=inner.capabilities, sample_rate=inner.sample_rate, num_channels=inner.num_channels)
+        self._inner = inner
+        self._tracker = tracker
+        self._log = log
+        inner.on("metrics_collected", self._fwd_metrics)
+        inner.on("error", self._fwd_error)
+
+    # ---- forwarding ----
+    def _fwd_metrics(self, m: Any) -> None:
+        self.emit("metrics_collected", m)
+
+    def _fwd_error(self, e: Any) -> None:
+        self.emit("error", e)
+
+    @property
+    def label(self) -> str:  # type: ignore[override]
+        return getattr(self._inner, "label", super().label)
+
+    @property
+    def model(self) -> str:  # type: ignore[override]
+        return getattr(self._inner, "model", "unknown")
+
+    @property
+    def provider(self) -> str:  # type: ignore[override]
+        return getattr(self._inner, "provider", "unknown")
+
+    def prewarm(self) -> None:
+        self._inner.prewarm()
+
+    async def aclose(self) -> None:
+        try:
+            self._inner.off("metrics_collected", self._fwd_metrics)
+            self._inner.off("error", self._fwd_error)
+        except Exception:
+            pass
+        await self._inner.aclose()
+
+    def _safe(self, fn: Callable[[str], Any], arg: str) -> None:
+        try:
+            fn(arg)
+        except Exception:
+            pass
+
+    # ---- tracked paths ----
+    def synthesize(self, text: str, *, conn_options=DEFAULT_API_CONNECT_OPTIONS):  # type: ignore[override]
+        self._safe(self._tracker.on_tts_start, text)
+        stream = self._inner.synthesize(text, conn_options=conn_options)
+        orig_run = getattr(stream, "_run", None)
+        if callable(orig_run):
+            async def wrapped_run(output_emitter):
+                try:
+                    return await orig_run(output_emitter)
+                finally:
+                    self._safe(self._tracker.on_tts_end, text)
+            stream._run = wrapped_run  # type: ignore[attr-defined]
+        else:
+            orig_aclose = getattr(stream, "aclose", None)
+            if callable(orig_aclose):
+                async def wrapped_close(*a, **kw):
+                    try:
+                        return await orig_aclose(*a, **kw)
+                    finally:
+                        self._safe(self._tracker.on_tts_end, text)
+                stream.aclose = wrapped_close  # type: ignore[attr-defined]
+        return stream
+
+    def stream(self, *, conn_options=DEFAULT_API_CONNECT_OPTIONS):  # type: ignore[override]
+        inner_stream = self._inner.stream(conn_options=conn_options)
+        orig_push = getattr(inner_stream, "push_text", None)
+        orig_flush = getattr(inner_stream, "flush", None)
+        orig_end = getattr(inner_stream, "end_input", None)
+        if not (callable(orig_push) and callable(orig_flush)):
+            return inner_stream
+
+        buf = {"text": "", "started": False}
+
+        def _close_segment() -> None:
+            txt = buf["text"].strip()
+            if txt and buf["started"]:
+                self._safe(self._tracker.on_tts_end, txt)
+            buf["text"], buf["started"] = "", False
+
+        def tracked_push(token: str, *a, **kw):
+            if token:
+                if not buf["started"]:
+                    self._safe(self._tracker.on_tts_start, token)
+                    buf["started"] = True
+                buf["text"] += token
+            return orig_push(token, *a, **kw)
+
+        def tracked_flush(*a, **kw):
+            _close_segment()
+            return orig_flush(*a, **kw)
+
+        def tracked_end(*a, **kw):
+            _close_segment()
+            return orig_end(*a, **kw) if callable(orig_end) else None
+
+        inner_stream.push_text = tracked_push  # type: ignore[method-assign]
+        inner_stream.flush = tracked_flush  # type: ignore[method-assign]
+        if callable(orig_end):
+            inner_stream.end_input = tracked_end  # type: ignore[method-assign]
+        return inner_stream
+
+
+# ───────────────────────────── helpers ─────────────────────────────
+
+def _label(p: str) -> str:
+    return {"openrouter": "OpenRouter", "elevenlabs": "ElevenLabs", "direct": "Direct", "inference": "Inference"}.get(p, p)
+
+
+def _effective_tts(tts_prov: str, cfg: Settings) -> tuple[str, str]:
+    """مدل/صدای مؤثر TTS برای لاگ و متریک."""
+    if tts_prov == "openrouter":
+        model = _env_str("OPENROUTER_TTS_MODEL") or "elevenlabs/eleven-v3-conversational"  # پیش‌فرض OpenRouterTTS
+        voice = (_env_str("OPENROUTER_TTS_VOICE") or _env_str("OPENROUTER_VOICE")
+                 or _env_str("ELEVENLABS_VOICE_ID") or cfg.tts_voice) or "george"
+        return model, voice
+    if tts_prov == "elevenlabs":
+        model = _env_str("ELEVENLABS_MODEL") or _env_str("ELEVENLABS_TTS_MODEL") or "eleven_flash_v2_5"
+        voice = (_env_str("ELEVENLABS_VOICE_ID") or _env_str("ELEVEN_VOICE_ID") or cfg.tts_voice) or "JBFqnCBsd6RMkjVDRZzb"
+        return model, voice
+    return cfg.tts_model, cfg.tts_voice
+
+
+def _handle_exception(handle: Any) -> BaseException | None:
+    """SpeechHandle در همهٔ نسخه‌ها exception() ندارد؛ امن بخوان."""
+    fn = getattr(handle, "exception", None)
+    if not callable(fn):
+        return None
+    try:
+        return fn()
+    except (Exception, asyncio.CancelledError):
+        return None
+
+
+async def _trim_history(agent: Any, keep: int, slack: int, log: logging.Logger) -> None:
+    """تاریخچه را دسته‌ای کوتاه می‌کند.
+
+    * فقط وقتی طول > keep+slack شد، تا keep کوتاه می‌شود (هر نوبت کوتاه‌کردن = prefix عوض می‌شود
+      و prompt-cache ارائه‌دهندهٔ LLM بی‌اثر می‌شود).
+    * از مسیر agent.update_chat_ctx اعمال می‌شود؛ تغییر روی agent.chat_ctx (کپی) اثری ندارد.
+    * copy → truncate → update بدون await میانی است تا آیتم جدیدی گم نشود.
+    """
+    try:
+        ctx = agent.chat_ctx.copy()
+        n = len(ctx.items)
+        if n <= keep + slack:
+            return
+        if hasattr(ctx, "truncate"):
+            ctx.truncate(max_items=keep)
+        else:
+            ctx.items[:] = ctx.items[-keep:]
+        await agent.update_chat_ctx(ctx)
+        log.info("chat history trimmed %s → %s items", n, len(ctx.items))
+    except Exception as e:
+        log.warning("history trim failed: %s", e)
+
+
+# ───────────────────────────── prewarm (قبل از اختصاص job) ─────────────────────────────
+
+def prewarm(proc: agents.JobProcess) -> None:
+    """ایندکس دانش (Chroma+BM25) یک بار در prewarm لود می‌شود، نه روی مسیر شروع جلسه."""
+    try:
+        proc.userdata["knowledge"] = _load_knowledge(logger)
+        logger.info("knowledge prewarmed")
+    except Exception as e:
+        logger.warning("knowledge prewarm failed (%s) — will load in job", e)
+
+
+# ───────────────────────────── entrypoint ─────────────────────────────
+
 async def entrypoint(ctx: agents.JobContext) -> None:
     await ctx.connect()
+    cfg = Settings.from_env()
 
     job_logger = logging.getLogger(f"sam-voice-agent.{ctx.job.id}")
     job_logger.setLevel(logging.INFO)
     room_log_handler = RoomLogHandler(lambda message: publish_room_message(ctx, message, topic="diagnostics"))
+    try:
+        room_log_handler.setLevel(cfg.room_log_level)
+    except Exception:
+        pass
     job_logger.addHandler(room_log_handler)
-    async def detach_room_log_handler() -> None:
+
+    # تسک‌های پس‌زمینه با reference نگه داشته می‌شوند تا GC وسط کار نابودشان نکند
+    bg_tasks: set[asyncio.Task] = set()
+
+    def spawn(coro: Awaitable[Any]) -> asyncio.Task:
+        t = asyncio.ensure_future(coro)
+        bg_tasks.add(t)
+        t.add_done_callback(bg_tasks.discard)
+        t.add_done_callback(_consume_task_result)
+        return t
+
+    closers: list[Callable[[], Awaitable[None]]] = []
+
+    async def _shutdown() -> None:
         job_logger.removeHandler(room_log_handler)
         room_log_handler.close()
-    ctx.add_shutdown_callback(detach_room_log_handler)
+        for t in list(bg_tasks):
+            t.cancel()
+        for c in closers:
+            try:
+                await c()
+            except Exception:
+                pass
+
+    ctx.add_shutdown_callback(_shutdown)
 
     fast_start_enabled = flag("AGENT_FAST_START", True)
-    from ..assistant.prompt import assistant_name, sales_prompt
-    job_logger.info("Assistant: name=%s (dispatch=%s) · fast_start=%s", assistant_name(), os.getenv("LIVEKIT_AGENT_NAME","sam-voice-agent"), fast_start_enabled)
+    job_logger.info("Assistant: name=%s (dispatch=%s) · fast_start=%s", assistant_name(),
+                    os.getenv("LIVEKIT_AGENT_NAME", "sam-voice-agent"), fast_start_enabled)
     if sales_prompt():
         job_logger.info("Sales playbook loaded — the assistant sells, it does not just answer")
 
@@ -55,14 +537,10 @@ async def entrypoint(ctx: agents.JobContext) -> None:
     if latency.enabled:
         job_logger.info("Latency instrumentation on: summary every %s turns", latency.report_interval or "∞")
 
-    stt_model = os.getenv("LIVEKIT_STT_MODEL", "deepgram/nova-3")
-    stt_language = os.getenv("LIVEKIT_STT_LANGUAGE", "fa")
-    stt_fallback_models = [i.strip() for i in os.getenv("LIVEKIT_STT_FALLBACK","").split(",") if i.strip()]
-    # LLM: OpenRouter (preferred) or Cloudflare — unified via config/llm.py
+    # ── LLM config (OpenRouter/Cloudflare) ──
     try:
         llm_prov, llm_model, llm_base_url = validate_llm_config(job_logger)
     except RuntimeError as exc:
-        # give actionable message for OpenRouter onboarding
         raise RuntimeError(str(exc) + " — برای OpenRouter: OPENROUTER_API_KEY را از https://openrouter.ai/settings/keys بگیرید و در .env بگذارید.") from exc
     llm_api_key = resolve_llm_api_key()
     llm_max_tokens = resolve_llm_max_tokens()
@@ -70,320 +548,168 @@ async def entrypoint(ctx: agents.JobContext) -> None:
         raise RuntimeError("LLM_MAX_TOKENS must be between 1 and 24000")
     llm_headers = llm_extra_headers()
     job_logger.info("LLM resolved: provider=%s model=%s max_tokens=%s base=%s", llm_prov, llm_model, llm_max_tokens, llm_base_url)
+    extra_body = llm_request_body(llm_max_tokens, job_logger, model=llm_model)
 
-    livekit_tts_model = os.getenv("LIVEKIT_TTS_MODEL", "google/gemini-3.8-flash-lite-tts").strip()
-    livekit_tts_voice = os.getenv("LIVEKIT_TTS_VOICE", "Charon").strip() or "Charon"
-    tts_language = os.getenv("LIVEKIT_TTS_LANGUAGE", "fa").strip() or "fa"
-    # Effective TTS model/voice for logs — openrouter uses its own vars, elevenlabs مستقیم از elevenlabs.io
-    or_tts_model = os.getenv("OPENROUTER_TTS_MODEL", "elevenlabs/eleven-v3-conversational").strip() or "elevenlabs/eleven-v3-conversational"
-    or_tts_voice = (
-        os.getenv("OPENROUTER_TTS_VOICE", "").strip()
-        or os.getenv("OPENROUTER_VOICE", "").strip()
-        or os.getenv("ELEVENLABS_VOICE_ID", "").strip()
-        or livekit_tts_voice
-    ) or "george"
-    eleven_tts_model = (
-        os.getenv("ELEVENLABS_MODEL", "").strip()
-        or os.getenv("ELEVENLABS_TTS_MODEL", "").strip()
-        or "eleven_flash_v2_5"
-    )
-    eleven_tts_voice = (
-        os.getenv("ELEVENLABS_VOICE_ID", "").strip()
-        or os.getenv("ELEVEN_VOICE_ID", "").strip()
-        or livekit_tts_voice
-    ) or "JBFqnCBsd6RMkjVDRZzb"
+    if any(k in llm_model.lower() for k in ("gpt-oss", "deepseek-r1", "o1", "o3", "qwen3", "qwq", "r1-distill")):
+        job_logger.warning("LLM=%s کند است (TTFT 1-5s, reasoning). برای <1s از openai/gpt-4o-mini یا google/gemini-2.0-flash-001 یا meta-llama/llama-3.3-70b-instruct استفاده کنید", llm_model)
+    if llm_max_tokens > 200:
+        job_logger.info("LLM max_tokens=%s بالا است؛ برای voice کمتر از 150 توصیه می‌شود", llm_max_tokens)
 
-    # بهینه برای سرعت: retry کمتر + تایم‌اوت کوتاه‌تر (پیش‌فرض‌ها 6*3s=18s بود → گلوگاه)
-    inference_conn_options = APIConnectOptions(
-        max_retry=int(os.getenv("LIVEKIT_INFERENCE_MAX_RETRY","4")),
-        retry_interval=float(os.getenv("LIVEKIT_INFERENCE_RETRY_INTERVAL","1.5")),
-        timeout=float(os.getenv("LIVEKIT_INFERENCE_TIMEOUT","10.0")),
-    )
+    # ── conn options ──
+    inference_conn_options = APIConnectOptions(max_retry=cfg.inf_retry, retry_interval=cfg.inf_interval, timeout=cfg.inf_timeout)
+    llm_conn_options = APIConnectOptions(max_retry=cfg.llm_retry, retry_interval=cfg.llm_interval, timeout=cfg.llm_timeout)
     session_conn_options = SessionConnectOptions(
         stt_conn_options=inference_conn_options,
+        llm_conn_options=llm_conn_options,
         tts_conn_options=inference_conn_options,
-        max_unrecoverable_errors=int(os.getenv("LIVEKIT_MAX_UNRECOVERABLE_ERRORS","8")),
+        max_unrecoverable_errors=cfg.max_unrecoverable,
     )
 
-    # STT and TTS providers can be set independently; TTS_PROVIDER overrides SPEECH_PROVIDER for TTS
-    # httpx SSL creation blocks ~1s → offload to thread (fixes 1180ms/1017ms warnings)
     stt_prov = stt_provider()
     tts_prov = tts_provider()
-    try:
-        stt, tts = await asyncio.gather(
-            asyncio.to_thread(build_stt, stt_prov, model=stt_model, language=stt_language, conn_options=inference_conn_options, fallback=stt_fallback_models, job_logger=job_logger),
-            asyncio.to_thread(build_tts, tts_prov, model=livekit_tts_model, voice=livekit_tts_voice, language=tts_language, conn_options=inference_conn_options, job_logger=job_logger),
-        )
-        job_logger.info("STT/TTS built via thread (SSL offloaded)")
-    except Exception as e:
-        job_logger.warning("STT/TTS thread build failed (%s) — fallback to sync", e)
-        stt = build_stt(stt_prov, model=stt_model, language=stt_language, conn_options=inference_conn_options, fallback=stt_fallback_models, job_logger=job_logger)
-        tts = build_tts(tts_prov, model=livekit_tts_model, voice=livekit_tts_voice, language=tts_language, conn_options=inference_conn_options, job_logger=job_logger)
-    # تضمین streaming: حتی اگر TTS اصلی streaming نباشد، با StreamAdapter جمله‌ای stream می‌شود (سرعت +30%)
-    # برای فارسی جمله‌ها طولانیه → روی «،» و «؛» هم flush کن تا TTS زودتر شروع شود (گانت: 1.40s → <400ms)
-    if not getattr(tts.capabilities, "streaming", False):
+    eff_tts_model, eff_tts_voice = _effective_tts(tts_prov, cfg)
+    tts_model, tts_voice = eff_tts_model, eff_tts_voice
+
+    # ── builders (همه در thread؛ SSL context و import سنگین event loop را بلوکه نمی‌کند) ──
+    def _build_stt_sync():
+        return build_stt(stt_prov, model=cfg.stt_model, language=cfg.stt_language, conn_options=inference_conn_options,
+                         fallback=list(cfg.stt_fallback), job_logger=job_logger)
+
+    def _build_tts_sync():
+        return build_tts(tts_prov, model=cfg.tts_model, voice=cfg.tts_voice, language=cfg.tts_language,
+                         conn_options=inference_conn_options, job_logger=job_logger)
+
+    def _build_fallback_tts_sync():
+        return build_tts("inference", model=cfg.tts_model, voice=cfg.tts_voice, language=cfg.tts_language,
+                         conn_options=inference_conn_options, job_logger=job_logger)
+
+    want_tts_fallback = tts_prov == "openrouter" and _env_not_off("OPENROUTER_TTS_FALLBACK", True)
+
+    async def _build_speech():
+        async def _fb():
+            if not want_tts_fallback:
+                return None
+            try:
+                return await asyncio.to_thread(_build_fallback_tts_sync)
+            except Exception as e:
+                job_logger.warning("Could not build TTS fallback: %s (continuing without fallback)", e)
+                return None
+        try:
+            stt_, tts_, fb_ = await asyncio.gather(asyncio.to_thread(_build_stt_sync), asyncio.to_thread(_build_tts_sync), _fb())
+            job_logger.info("STT/TTS built via threads")
+            return stt_, tts_, fb_
+        except Exception as e:
+            job_logger.warning("STT/TTS thread build failed (%s) — fallback to sync", e)
+            return _build_stt_sync(), _build_tts_sync(), None
+
+    def _make_llm_legacy():
+        kwargs = dict(model=llm_model, api_key=llm_api_key, base_url=llm_base_url, extra_body=extra_body)
+        if llm_headers:
+            for hk in ("extra_headers", "default_headers", "headers"):
+                try:
+                    return lk_openai.LLM(**{**kwargs, hk: llm_headers})
+                except TypeError:
+                    continue
+        return lk_openai.LLM(**kwargs)
+
+    def _make_llm_sync():
+        """کلاینت اختصاصی: max_retries=0 (retry را LiveKit مدیریت می‌کند)، pool گرم، timeout مشخص."""
+        try:
+            http_client = httpx.AsyncClient(
+                timeout=httpx.Timeout(connect=10.0, read=cfg.llm_read_timeout, write=5.0, pool=5.0),
+                follow_redirects=True,
+                limits=httpx.Limits(max_connections=20, max_keepalive_connections=20, keepalive_expiry=120),
+            )
+            client = openai_sdk.AsyncClient(api_key=llm_api_key, base_url=llm_base_url, max_retries=0,
+                                            http_client=http_client, default_headers=llm_headers or None)
+            return lk_openai.LLM(model=llm_model, client=client, extra_body=extra_body), http_client
+        except Exception as e:
+            job_logger.warning("custom LLM client failed (%s) — legacy construction", e)
+            return _make_llm_legacy(), None
+
+    async def _build_llm():
+        try:
+            return await asyncio.to_thread(_make_llm_sync)
+        except Exception as e:
+            job_logger.warning("LLM init thread failed (%s) — direct build", e)
+            return _make_llm_sync()
+
+    async def _build_rag():
+        pre = None
+        try:
+            pre = ctx.proc.userdata.get("knowledge")
+        except Exception:
+            pass
+        if pre is not None:
+            job_logger.info("RAG: using prewarmed index")
+            return pre
+        try:
+            return await asyncio.to_thread(_load_knowledge, job_logger)
+        except Exception as e:
+            job_logger.error("RAG load failed (%s) — continuing without knowledge", e)
+            return None, None
+
+    # همه هم‌زمان: زمان شروع = کندترین بخش، نه مجموع
+    (stt, tts, fallback_tts), (_llm, llm_http), (knowledge_index, knowledge_config) = await asyncio.gather(
+        _build_speech(), _build_llm(), _build_rag()
+    )
+    if llm_http is not None:
+        closers.append(llm_http.aclose)
+
+        async def _warm_llm_connection() -> None:  # TLS handshake را قبل از اولین نوبت انجام بده
+            try:
+                await llm_http.head(llm_base_url, timeout=3.0)
+            except Exception:
+                pass
+        spawn(_warm_llm_connection())
+
+    # ── TTS wrapping: streaming → fallback → tracking ──
+    native_streaming = bool(getattr(tts.capabilities, "streaming", False))
+    if not native_streaming and BufferedSentenceStream is not None:
         try:
             from livekit.agents.tts import StreamAdapter
-            from livekit.agents import tokenize as _tok
-            # توکنایزر تند فارسی: جمله + بند (روی نقطه، علامت سوال/تعجب و ویرگول فارسی flush کن)
-            class FastPersianTokenizer(_tok.tokenize.SentenceTokenizer if hasattr(_tok, 'tokenize') and hasattr(_tok.tokenize, 'SentenceTokenizer') else object):  # type: ignore
-                def __init__(self, base_tok):
-                    self._base = base_tok
-                    # کاراکترهایی که پایانِ قابلِ پخش هستند — ویرگول فارسی را هم جزوِ پایان حساب کن
-                    self._flush_chars = set(".\n!؟?،؛:;")
-                def tokenize(self, text: str, *, language: str | None = None) -> list[str]:  # type: ignore[override]
-                    # اول با توکنایزر اصلی به جمله‌ها بشکن
-                    try:
-                        sents = self._base.tokenize(text) if self._base else [text]
-                    except Exception:
-                        sents = [text]
-                    # هر جمله را روی ویرگول/نقطه‌ویرگول هم به بندهای کوچک‌تر بشکن (حداقل 12 کاراکتر)
-                    out: list[str] = []
-                    for s in sents:
-                        # اگر جمله کوتاهه (<35 کاراکتر) همون رو بده — نیازی به شکستن نیست
-                        if len(s.strip()) < 35:
-                            out.append(s)
-                            continue
-                        # بشکن روی ، و ؛ و : ولی فقط اگر هر تکه >=18 کاراکتر باشد (تا TTS تکه‌تکه نشود)
-                        parts: list[str] = []
-                        cur = ""
-                        for ch in s:
-                            cur += ch
-                            if ch in self._flush_chars and len(cur.strip()) >= 18:
-                                # فقط اگر بعد از این کاراکتر، متنِ قابلِ معنایی داریم
-                                parts.append(cur)
-                                cur = ""
-                        if cur.strip():
-                            if parts:
-                                parts[-1] += cur
-                            else:
-                                parts.append(cur)
-                        # اگر نشکست، همان جمله
-                        out.extend(parts if parts else [s])
-                    return out
-                def stream(self, *, language: str | None = None):  # type: ignore[override]
-                    # LiveKit StreamAdapter expects .stream() → SentenceStream
-                    # از BufferedSentenceStream استفاده کن تا قرارداد LiveKit رعایت شود
-                    try:
-                        from livekit.agents.tokenize.token_stream import BufferedSentenceStream
-                        return BufferedSentenceStream(tokenizer=self.tokenize, min_token_len=1, min_ctx_len=10)
-                    except Exception:
-                        # fallback: اگر base دارد stream را deleg کن
-                        try:
-                            if self._base and hasattr(self._base, 'stream'):
-                                return self._base.stream(language=language)
-                        except Exception:
-                            pass
-                        # آخرین fallback: ساده‌ترین استریم
-                        from livekit.agents.tokenize.token_stream import BufferedSentenceStream as _BS
-                        return _BS(tokenizer=self.tokenize, min_token_len=1, min_ctx_len=10)
-                def stream_text(self, text: str):
-                    # سازگاری قدیمی
-                    return self.tokenize(text)
-
-            try:
-                base_tok = _tok.basic.SentenceTokenizer()
-            except Exception:
-                try:
-                    base_tok = _tok.tokenize.basic.SentenceTokenizer()
-                except Exception:
-                    base_tok = None
-            # حتی اگر base_tok نداریم، با FastPersianTokenizer خالی هم کار می‌کند
-            sent_tok = FastPersianTokenizer(base_tok)
-            tts = StreamAdapter(tts=tts, sentence_tokenizer=sent_tok)  # type: ignore[arg-type]
-            job_logger.info("TTS streaming تضمین شد: FastPersianTokenizer فعال (جمله‌ای+بندی، flush روی ،؛:)")
+            tts = StreamAdapter(tts=tts, sentence_tokenizer=FastPersianTokenizer())  # type: ignore[arg-type]
+            job_logger.info("TTS streaming تضمین شد: FastPersianTokenizer (جمله‌ای + بندی روی ،؛:)")
         except Exception as e:
             job_logger.warning("StreamAdapter فعال‌سازی نشد: %s", e)
 
-    # Fallback for OpenRouter 402/429 (insufficient credits/rate limit) → LiveKit Inference
-    # Set OPENROUTER_TTS_FALLBACK=false to disable
-    if tts_prov == "openrouter" and os.getenv("OPENROUTER_TTS_FALLBACK", "true").strip().lower() not in {"0", "false", "no", "off", ""}:
+    if fallback_tts is not None:
         try:
             from livekit.agents.tts import FallbackAdapter
+            # FallbackAdapter به TTS فرزند conn_options خودش را می‌دهد (پیش‌فرض ~۱۰ثانیه timeout)؛
+            # برای صدا، فیل‌اور سریع‌تر بهتر از ۱۰ ثانیه سکوت است.
             try:
-                fallback_tts = await asyncio.to_thread(build_tts, "inference", model=livekit_tts_model, voice=livekit_tts_voice, language=tts_language, conn_options=inference_conn_options, job_logger=job_logger)
-            except Exception:
-                fallback_tts = build_tts("inference", model=livekit_tts_model, voice=livekit_tts_voice, language=tts_language, conn_options=inference_conn_options, job_logger=job_logger)
-            job_logger.info("OpenRouter TTS fallback enabled: primary=openrouter/%s → fallback=inference/%s", or_tts_model, livekit_tts_model)
-            # FallbackAdapter will try primary, then fallback on failure (e.g. 402)
-            tts = FallbackAdapter([tts, fallback_tts])  # type: ignore
+                tts = FallbackAdapter([tts, fallback_tts],  # type: ignore[arg-type]
+                                      attempt_timeout=_env_float("TTS_FALLBACK_ATTEMPT_TIMEOUT", 5.0),
+                                      max_retry_per_tts=_env_int("TTS_FALLBACK_MAX_RETRY", 1))
+            except TypeError:
+                tts = FallbackAdapter([tts, fallback_tts])  # type: ignore[arg-type]
+            job_logger.info("OpenRouter TTS fallback enabled: primary=openrouter/%s → fallback=inference/%s", eff_tts_model, cfg.tts_model)
         except Exception as e:
-            job_logger.warning("Could not enable OpenRouter TTS fallback: %s (continuing without fallback)", e)
+            job_logger.warning("Could not enable TTS fallback: %s (continuing without fallback)", e)
 
-    # Human-readable labels and effective model/voice for logs
-    def _label(p: str) -> str:
-        return {"openrouter": "OpenRouter", "elevenlabs": "ElevenLabs", "direct": "Direct", "inference": "Inference"}.get(p, p)
+    if latency.enabled:  # wrapper فقط وقتی گانت فعال است (کمتر لایه = کمتر overhead)
+        try:
+            tts = TrackedTTS(tts, latency, job_logger)
+            job_logger.info("TTS tracking enabled: هر تکه صدا یک سگمنت در گانت")
+        except Exception as e:
+            job_logger.warning("TTS tracking wrap failed: %s", e)
 
-    if tts_prov == "openrouter":
-        eff_tts_model, eff_tts_voice = or_tts_model, or_tts_voice
-    elif tts_prov == "elevenlabs":
-        eff_tts_model, eff_tts_voice = eleven_tts_model, eleven_tts_voice
-    else:
-        eff_tts_model, eff_tts_voice = livekit_tts_model, livekit_tts_voice
-    # Use effective for metrics/logs
-    tts_model = eff_tts_model
-    tts_voice = eff_tts_voice
-
-    job_logger.info(
-        "Voice pipeline: STT=%s/%s/%s, LLM=%s (max_tokens=%s), TTS=%s/%s voice=%s lang=%s",
-        _label(stt_prov),
-        stt_model, stt_language, llm_model, llm_max_tokens,
-        _label(tts_prov),
-        eff_tts_model, eff_tts_voice, tts_language,
-    )
-
-    # Wrap TTS for per-chunk tracking (هر تکه صدا = یک سگمنت در یک ردیف)
-    # روش: هر دو مسیر synthesize (ChunkedStream) و stream (SynthesizeStream) را پشتیبانی می‌کنیم
-    try:
-        from livekit.agents import tts as tts_api
-        from livekit.agents.types import DEFAULT_API_CONNECT_OPTIONS
-
-        class TrackedTTS(tts_api.TTS):
-            def __init__(self, inner, tracker, logger):
-                super().__init__(capabilities=inner.capabilities, sample_rate=inner.sample_rate, num_channels=inner.num_channels)
-                self._inner = inner
-                self._tracker = tracker
-                self._log = logger
-
-            def synthesize(self, text: str, *, conn_options=DEFAULT_API_CONNECT_OPTIONS):
-                try:
-                    self._tracker.on_tts_start(text)
-                except Exception:
-                    pass
-                stream = self._inner.synthesize(text, conn_options=conn_options)
-                orig_run = getattr(stream, "_run", None)
-                if callable(orig_run):
-                    async def wrapped_run(output_emitter):
-                        try:
-                            return await orig_run(output_emitter)
-                        finally:
-                            try:
-                                self._tracker.on_tts_end(text)
-                            except Exception:
-                                pass
-                    stream._run = wrapped_run  # type: ignore
-                else:
-                    orig_aclose = getattr(stream, "aclose", None)
-                    if callable(orig_aclose):
-                        orig = orig_aclose
-                        async def wrapped_close(*a, **kw):
-                            try:
-                                return await orig(*a, **kw)
-                            finally:
-                                try:
-                                    self._tracker.on_tts_end(text)
-                                except Exception:
-                                    pass
-                        stream.aclose = wrapped_close  # type: ignore
-                return stream
-
-            def stream(self, *, conn_options=DEFAULT_API_CONNECT_OPTIONS):
-                # streaming TTS (Inference/Google) — inner باید stream داشته باشد
-                try:
-                    inner_stream = self._inner.stream(conn_options=conn_options)
-                except NotImplementedError:
-                    # inner واقعاً streaming نیست — بگذار خطای اصلی بالا بیاید تا SDK fallback کند
-                    raise
-                except Exception:
-                    raise
-                # هر flush یک سگمنت (= یک جمله) است؛ push_text تا flush بافر می‌شود
-                orig_push = getattr(inner_stream, "push_text", None)
-                orig_flush = getattr(inner_stream, "flush", None)
-                orig_end = getattr(inner_stream, "end_input", None)
-
-                if callable(orig_push) and callable(orig_flush):
-                    buf = {"text": "", "started": False}
-
-                    def tracked_push(token: str, *a, **kw):
-                        if token:
-                            if not buf["started"]:
-                                try:
-                                    self._tracker.on_tts_start(token)
-                                except Exception:
-                                    pass
-                                buf["started"] = True
-                            buf["text"] += token
-                        return orig_push(token, *a, **kw)
-
-                    def tracked_flush(*a, **kw):
-                        txt = buf["text"].strip()
-                        if txt and buf["started"]:
-                            try:
-                                self._tracker.on_tts_end(txt)
-                            except Exception:
-                                pass
-                        buf["text"] = ""
-                        buf["started"] = False
-                        return orig_flush(*a, **kw)
-
-                    def tracked_end(*a, **kw):
-                        # اگر flush نشده باقی مانده، همین‌جا ببند
-                        txt = buf["text"].strip()
-                        if txt and buf["started"]:
-                            try:
-                                self._tracker.on_tts_end(txt)
-                            except Exception:
-                                pass
-                            buf["text"] = ""
-                            buf["started"] = False
-                        if callable(orig_end):
-                            return orig_end(*a, **kw)
-
-                    inner_stream.push_text = tracked_push  # type: ignore[method-assign]
-                    inner_stream.flush = tracked_flush  # type: ignore[method-assign]
-                    if callable(orig_end):
-                        inner_stream.end_input = tracked_end  # type: ignore[method-assign]
-
-                return inner_stream
-
-            def __getattr__(self, name):
-                return getattr(self._inner, name)
-
-        tts = TrackedTTS(tts, latency, job_logger)
-        job_logger.info("TTS tracking enabled: هر تکه صدا به صورت سگمنت در گانت ثبت می‌شود")
-    except Exception as e:
-        job_logger.warning("TTS tracking wrap failed: %s", e)
+    job_logger.info("Voice pipeline: STT=%s/%s/%s, LLM=%s (max_tokens=%s), TTS=%s/%s voice=%s lang=%s",
+                    _label(stt_prov), cfg.stt_model, cfg.stt_language, llm_model, llm_max_tokens,
+                    _label(tts_prov), eff_tts_model, eff_tts_voice, cfg.tts_language)
 
     turn_handling = speed_profile(job_logger)
-    # Use effective model for streaming log
     if tts_prov == "openrouter":
-        streaming_desc = f"OpenRouter {or_tts_model} (via StreamAdapter, mp3)"
+        streaming_desc = f"OpenRouter {eff_tts_model} (via StreamAdapter, mp3)"
     elif tts_prov == "elevenlabs":
-        streaming_desc = f"ElevenLabs {eleven_tts_model} (native streaming)"
+        streaming_desc = f"ElevenLabs {eff_tts_model} (native streaming)"
     else:
-        streaming_desc = "GeminiTTS via SDK StreamAdapter (sentence-level)" if not tts.capabilities.streaming else "native streaming"
+        streaming_desc = "native streaming" if native_streaming else "SDK StreamAdapter (sentence-level)"
     job_logger.info("Streaming: STT=%s (streaming=%s) · LLM=%s streaming · TTS=%s (%s) · turn_handling=%s · FAST_START=%s",
-        stt_model, getattr(stt.capabilities,"streaming","?"), llm_model, eff_tts_model,
-        streaming_desc,
-        json.dumps(turn_handling, ensure_ascii=False) if turn_handling else "SDK defaults", fast_start_enabled)
-
-    extra_body = llm_request_body(llm_max_tokens, job_logger, model=llm_model)
-
-    # هشدار مدل کند: gpt-oss / reasoning برای voice مناسب نیست (TTFT 1-5s, لاگ فعلی  openai/gpt-oss-120b )
-    if any(k in llm_model.lower() for k in ("gpt-oss", "deepseek-r1", "o1", "o3", "qwen3", "qwq", "r1-distill")):
-        job_logger.warning("LLM=%s کند است (TTFT 1-5s, reasoning / Thinking). برای <1s از openai/gpt-4o-mini یا google/gemini-2.0-flash-001 یا meta-llama/llama-3.3-70b-instruct استفاده کنید — OPENROUTER_LLM_MODEL را عوض کنید", llm_model)
-    # تذکر max_tokens بالا = تاخیر بیشتر (هر توکن اضافی = زمان)
-    if llm_max_tokens > 200:
-        job_logger.info("LLM max_tokens=%s بالا است؛ برای voice کمتر از 150 توصیه می‌شود (هر 10 توکن ~80ms)", llm_max_tokens)
-
-    # openai.LLM creation بلوکه‌کننده است (SSL context ~3s روی Windows) — به thread offload کن
-    # پشتیبانی از extra headers برای OpenRouter (HTTP-Referer/X-Title) اگر SDK بپذیرد
-    def _make_llm():
-        kwargs = dict(model=llm_model, api_key=llm_api_key, base_url=llm_base_url, extra_body=extra_body)
-        # try to pass headers if provider is openrouter and SDK supports it
-        if llm_headers:
-            # livekit-plugins-openai supports extra_headers / default_headers in newer versions
-            for hk in ("extra_headers", "default_headers", "headers"):
-                try:
-                    return openai.LLM(**{**kwargs, hk: llm_headers})
-                except TypeError:
-                    continue
-        return openai.LLM(**kwargs)
-    try:
-        _llm = await asyncio.to_thread(_make_llm)
-    except Exception as e:
-        job_logger.warning("LLM init از thread شکست خورد (%s) — fallback به ساخت مستقیم", e)
-        _llm = _make_llm()
+                    cfg.stt_model, getattr(stt.capabilities, "streaming", "?"), llm_model, eff_tts_model, streaming_desc,
+                    json.dumps(turn_handling, ensure_ascii=False, default=str) if turn_handling else "SDK defaults",
+                    fast_start_enabled)
 
     session = AgentSession(
         stt=stt,
@@ -393,198 +719,146 @@ async def entrypoint(ctx: agents.JobContext) -> None:
         **({"turn_handling": turn_handling} if turn_handling else {}),
     )
 
-    # Prewarm TTS: اتصال وب‌سوکت را قبل از اولین نوبت باز کن (TTFB کمتر ~110ms)
-    # TrackedTTS مانع دیدن prewarm روی inner است — هر دو را چک کن
-    _prewarm_targets = [tts]
-    for attr in ("_inner", "tts", "_tts"):
-        try:
-            inner = getattr(tts, attr, None)
-            if inner is not None and inner not in _prewarm_targets:
-                _prewarm_targets.append(inner)
-        except Exception:
-            pass
-    for tgt in _prewarm_targets:
-        if hasattr(tgt, "prewarm"):
-            try:
-                tgt.prewarm()  # type: ignore[attr-defined]
-                job_logger.info("TTS prewarm فراخوانی شد (%s)", type(tgt).__name__)
-                break
-            except Exception as e:
-                job_logger.warning("TTS prewarm شکست: %s", e)
+    # Prewarm TTS (wrapperها prewarm را به inner می‌رسانند؛ در نسخهٔ قبل هرگز به inner نمی‌رسید)
+    try:
+        tts.prewarm()
+        job_logger.info("TTS prewarm فراخوانی شد (%s)", type(tts).__name__)
+    except Exception as e:
+        job_logger.warning("TTS prewarm شکست: %s", e)
 
     av_provider = avatar_provider()
     if av_provider == "none":
-        job_logger.info("Avatar disabled (AVATAR_ENABLED=%s, AVATAR_PROVIDER=%s); using direct audio", os.getenv("AVATAR_ENABLED","false"), os.getenv("AVATAR_PROVIDER","spatius"))
+        job_logger.info("Avatar disabled (AVATAR_ENABLED=%s, AVATAR_PROVIDER=%s); using direct audio",
+                        os.getenv("AVATAR_ENABLED", "false"), os.getenv("AVATAR_PROVIDER", "spatius"))
     avatar = await start_avatar(av_provider, session, ctx.room, job_logger)
 
-    async def publish_user_transcript(event) -> None:
-        text = (event.transcript or "").strip()
-        if text:
-            await publish_room_message(ctx, {"type":"user_transcript","text":text,"final":event.is_final})
+    # ── RAG objects ──
+    tool_timings: dict[str, float] = {}
+    knowledge_tool = _make_knowledge_tool(knowledge_index, knowledge_config, job_logger, tool_timings) if knowledge_index is not None else None
+    rag = RagPrefetcher(knowledge_index, knowledge_config, job_logger, tool_timings, enabled=cfg.rag_preload, timeout=cfg.rag_timeout)
+    assistant = RagAssistant(knowledge_tool=knowledge_tool, latency_tracker=latency, rag=rag)
+
+    # ── publishers ──
+    async def publish_latency_msg() -> None:
+        await publish_room_message(ctx, {"type": "latency", **latency.as_dict()}, topic="diagnostics")
+
+    async def publish_assistant_reply_msg(text: str) -> None:
+        await publish_room_message(ctx, {"type": "assistant_reply", "text": text})
+
+    last_pub = {"t": 0.0, "text": ""}
 
     @session.on("user_input_transcribed")
     def on_user_input_transcribed(event) -> None:
-        asyncio.create_task(publish_user_transcript(event))
+        text = (getattr(event, "transcript", "") or "").strip()
+        if not text:
+            return
+        is_final = bool(getattr(event, "is_final", False))
+        now = time.monotonic()
+        # interim ها throttle می‌شوند؛ final همیشه منتشر می‌شود
+        if is_final or (text != last_pub["text"] and now - last_pub["t"] >= cfg.interim_publish_s):
+            last_pub["t"], last_pub["text"] = now, text
+            spawn(publish_room_message(ctx, {"type": "user_transcript", "text": text, "final": is_final}))
+        if is_final:
+            rag.on_final_transcript(text)   # جستجوی RAG هم‌زمان با endpointing شروع شود
         try:
-            text = (getattr(event, "transcript", "") or "").strip()
-            is_final = bool(getattr(event, "is_final", False))
-            if text:
-                # اگر نوبت جدید شروع شده، turn_start نداشتیم — اولین interim همان شروع نوبت است
-                if latency._turn_start_ts is None or (latency._stt_last_ts is None and not latency._stt_tokens):
-                    try:
-                        latency.mark_turn_start()
-                    except Exception:
-                        pass
-                latency.on_stt_token(text, is_final=is_final)
+            if latency._turn_start_ts is None or (latency._stt_last_ts is None and not latency._stt_tokens):
+                try:
+                    latency.mark_turn_start()
+                except Exception:
+                    pass
+            latency.on_stt_token(text, is_final=is_final)
         except Exception:
             pass
 
     tts_requests = {"turn": 0}
+
     @session.on("metrics_collected")
     def on_metrics_collected(event) -> None:
-        if getattr(event.metrics,"type","") == "tts_metrics":
+        if getattr(event.metrics, "type", "") == "tts_metrics":
             tts_requests["turn"] += 1
 
-    rate_limit_hits = {"count":0,"hinted":False}
+    rate_limit_hits = {"count": 0, "hinted": False}
+
     @session.on("error")
     def on_session_error(event) -> None:
         error = event.error
-        status = getattr(error,"status_code",None)
+        status = getattr(error, "status_code", None)
         body_str = str(getattr(error, "body", "") or str(error))
-        # ارور 400 معروف Cloudflare وقتی ابزار (function calling) فرستاده می‌شود
         if status == 400 and "array not in string" in body_str:
-            job_logger.error("LLM 400: Cloudflare gpt-oss-120b ابزار را نمی‌پذیرد (array not in string). فیکس: .env → RAG_PRELOAD=true و RAG_TOOL_ENABLED=false (یا خالی) بگذار و ری‌استارت کن. موقتاً بدون RAG جواب می‌دهد.")
+            job_logger.error("LLM 400: Cloudflare gpt-oss-120b ابزار را نمی‌پذیرد (array not in string). فیکس: .env → RAG_PRELOAD=true و RAG_TOOL_ENABLED=false و ری‌استارت.")
             return
         if status == 429:
             rate_limit_hits["count"] += 1
             if not rate_limit_hits["hinted"] and rate_limit_hits["count"] >= 4:
-                rate_limit_hits["hinted"]=True
+                rate_limit_hits["hinted"] = True
                 job_logger.error("LiveKit Inference still 429 after %d rejections. Run python scripts/check_inference.py", rate_limit_hits["count"])
             else:
                 job_logger.warning("LiveKit Inference 429 on %s (attempt %d, retrying)", event.source, rate_limit_hits["count"])
             return
         if status == 402:
-            # OpenRouter / Inference 402: credits exhausted
             if tts_prov == "openrouter":
-                job_logger.error("OpenRouter TTS 402: %s — credits exhausted. Add credits at https://openrouter.ai/settings/credits or set TTS_PROVIDER=inference to fallback. (OPENROUTER_TTS_FALLBACK=true enables auto fallback)", error)
+                job_logger.error("OpenRouter TTS 402: %s — credits exhausted. Add credits at https://openrouter.ai/settings/credits or set TTS_PROVIDER=inference (OPENROUTER_TTS_FALLBACK=true = auto fallback)", error)
             else:
                 job_logger.error("TTS 402: %s — credits exhausted. Set TTS_PROVIDER=inference to fallback.", error)
             return
-        # OpenRouter LLM 401/402/429/500 — قبلاً ساکت می‌ماند و «هیچ پاسخی» به نظر می‌رسید
         if status in (401, 402, 403, 429, 500, 502, 503):
             job_logger.error("LLM %s error %s: %s — کلید OPENROUTER_API_KEY و اعتبار و مدل (%s) را چک کنید", event.source, status, body_str[:600], llm_model)
             return
         job_logger.error("AgentSession %s error: %s (body=%s)", event.source, error, body_str[:800])
 
-    async def publish_latency_msg() -> None:
-        await publish_room_message(ctx, {"type":"latency", **latency.as_dict()}, topic="diagnostics")
-    async def publish_assistant_reply_msg(text: str) -> None:
-        await publish_room_message(ctx, {"type":"assistant_reply","text":text})
+    trim_state = {"running": False}
 
-    # RAG load: ممکن است 200-500ms طول بکشد (Chroma + BM25) — به thread offload کن تا event loop بلوکه نشود
-    try:
-        knowledge_index, knowledge_config = await asyncio.to_thread(_load_knowledge, job_logger)
-    except Exception as e:
-        job_logger.warning("RAG load از thread شکست (%s) — fallback مستقیم", e)
-        knowledge_index, knowledge_config = _load_knowledge(job_logger)
-    tool_timings: dict[str,float] = {}
-    knowledge_tool = _make_knowledge_tool(knowledge_index, knowledge_config, job_logger, tool_timings) if knowledge_index is not None else None
-    # نگه‌داشتن پیام preload برای پاکسازی بعد از هر نوبت (جلوگیری از رشد بی‌نهایت context)
-    _rag_preload_msg: list = [None]  # ChatMessage | None
+    def maybe_trim_history() -> None:
+        if cfg.max_history <= 0 or trim_state["running"]:
+            return
+        trim_state["running"] = True
+
+        async def _run() -> None:
+            try:
+                await _trim_history(assistant, cfg.max_history, cfg.history_slack, job_logger)
+            finally:
+                trim_state["running"] = False
+        spawn(_run())
 
     @session.on("conversation_item_added")
     def on_conversation_item_added(event) -> None:
         item = event.item
-        role = getattr(item,"role",None)
+        role = getattr(item, "role", None)
         if role == "user":
-            text = (getattr(item,"text_content","") or "").strip()
+            text = (getattr(item, "text_content", "") or "").strip()
             if text:
                 job_logger.info("User turn committed (%d chars)", len(text))
-                # برای Cloudflare: اگر ابزار خاموش است، حتی بدون RAG_PRELOAD هم preload را امتحان کن
-                rag_tool_enabled_voice = os.getenv("RAG_TOOL_ENABLED", "false").strip().lower() in {"1","true","yes","on"}
-                use_preload_voice = os.getenv("RAG_PRELOAD","false").strip().lower() in {"1","true","yes","on"} or not rag_tool_enabled_voice
-                if knowledge_index is not None and use_preload_voice:
-                    try:
-                        preload_ctx = _rag_preload(text, knowledge_index, knowledge_config, job_logger, tool_timings)
-                        if preload_ctx and hasattr(session,"chat_ctx") and session.chat_ctx is not None:
-                            try:
-                                # اگر پیام قبلی پاک نشده، اول پاک کن (جلوگیری از انباشتگی)
-                                old = _rag_preload_msg[0]
-                                if old is not None:
-                                    try:
-                                        session.chat_ctx.remove(old)
-                                    except Exception:
-                                        pass
-                                    _rag_preload_msg[0] = None
-                                msg = session.chat_ctx.add_message(role="system", content=f"دانش مرتبط (از پایگاه شرکت):\n{preload_ctx}")
-                                _rag_preload_msg[0] = msg
-                                job_logger.info("RAG voice preload injected (%d chars) — موقت برای همین نوبت", len(preload_ctx))
-                            except Exception as e:
-                                job_logger.warning("RAG chat_ctx inject failed: %s", e)
-                    except Exception as e:
-                                job_logger.warning("RAG voice preload failed: %s", e)
-            # اگر STT interim قبلاً جمع شده، turn_start را ریست نکن — وگرنه stt_tokens پاک می‌شود و گانت خالی می‌ماند
+            # اگر interim قبلاً جمع شده، turn_start را ریست نکن
             if latency._turn_start_ts is None:
                 try:
                     latency.mark_turn_start()
                 except Exception:
                     pass
-            latency.note_user_turn(getattr(item,"metrics",None))
+            latency.note_user_turn(getattr(item, "metrics", None))
         elif role == "assistant":
-            text = (getattr(item,"text_content","") or "").strip()
+            text = (getattr(item, "text_content", "") or "").strip()
             job_logger.info("LLM produced assistant text (%d chars)", len(text))
-            # پاکسازی پیام RAG موقت — نوبت بعدی با context تمیز شروع شود (سرعت + دقت)
-            old = _rag_preload_msg[0]
-            if old is not None:
-                try:
-                    session.chat_ctx.remove(old)
-                except Exception:
-                    pass
-                _rag_preload_msg[0] = None
             if tts_requests["turn"]:
-                tool_timings["tts_requests"]=float(tts_requests["turn"])
-            latency.record_turn(getattr(item,"metrics",None), reply_text=text, interrupted=bool(getattr(item,"interrupted",False)), stt_model=stt_model, llm_model=llm_model, tts_model=tts_model, tool_ms=dict(tool_timings))
-            tool_timings.clear()
-            tts_requests["turn"]=0
-            # تاریخچه را محدود کن — هر نوبت ۲ پیام اضافه می‌کند، بعد از ۸ نوبت LLM کند می‌شود
+                tool_timings["tts_requests"] = float(tts_requests["turn"])
             try:
-                max_keep = int(os.getenv("AGENT_MAX_HISTORY_ITEMS", "12").strip() or "12")
-                if max_keep > 0 and hasattr(session, "chat_ctx") and session.chat_ctx is not None:
-                    items = getattr(session.chat_ctx, "items", None) or getattr(session.chat_ctx, "messages", None)
-                    if items is not None:
-                        try:
-                            cur_len = len(items)  # type: ignore
-                        except Exception:
-                            cur_len = 0
-                        if cur_len and cur_len > max_keep:
-                            excess = cur_len - max_keep
-                            for _ in range(excess):
-                                try:
-                                    oldest = items[0]  # type: ignore
-                                    # پیام‌های RAG موقت را نگه دار — جداگانه پاک می‌شود
-                                    if oldest is _rag_preload_msg[0]:
-                                        # این را نپران، بعدی را امتحان کن
-                                        if len(items) > 1:
-                                            oldest = items[1]  # type: ignore
-                                        else:
-                                            break
-                                    if hasattr(session.chat_ctx, "remove"):
-                                        session.chat_ctx.remove(oldest)  # type: ignore
-                                    else:
-                                        break
-                                except Exception:
-                                    break
-                            job_logger.info("chat history trimmed %s → %s items (max %s)", cur_len, max_keep, max_keep)
+                latency.record_turn(getattr(item, "metrics", None), reply_text=text,
+                                    interrupted=bool(getattr(item, "interrupted", False)),
+                                    stt_model=cfg.stt_model, llm_model=llm_model, tts_model=tts_model,
+                                    tool_ms=dict(tool_timings))
             except Exception:
-                pass
-            asyncio.create_task(publish_latency_msg())
+                job_logger.exception("latency.record_turn failed")
+            tool_timings.clear()
+            tts_requests["turn"] = 0
+            maybe_trim_history()
+            spawn(publish_latency_msg())
             if text:
-                asyncio.create_task(publish_assistant_reply_msg(text))
+                spawn(publish_assistant_reply_msg(text))
 
     @session.on("agent_state_changed")
     def on_agent_state_changed(event) -> None:
         job_logger.info("Assistant state: %s -> %s", event.old_state, event.new_state)
 
+    # ── text chat ──
     async def respond_to_text(text: str, sender: str) -> None:
         job_logger.info("Text chat input from %s (%d chars)", sender, len(text))
         try:
@@ -593,74 +867,94 @@ async def entrypoint(ctx: agents.JobContext) -> None:
             pass
         try:
             session.interrupt()
-            # اگر ابزار خاموش است (حالت امن Cloudflare) حتی با RAG_PRELOAD=false هم preload کن
-            rag_tool_enabled = os.getenv("RAG_TOOL_ENABLED", "false").strip().lower() in {"1","true","yes","on"}
-            use_preload = os.getenv("RAG_PRELOAD","false").strip().lower() in {"1","true","yes","on"} or not rag_tool_enabled
-            if knowledge_index is not None and use_preload:
-                preload_ctx = _rag_preload(text, knowledge_index, knowledge_config, job_logger, tool_timings)
-                if preload_ctx:
-                    handle = session.generate_reply(user_input=text, instructions=f"دانش مرتبط از پایگاه شرکت (فقط از همین استفاده کن):\n{preload_ctx}")
-                else:
-                    handle = session.generate_reply(user_input=text)
-            else:
-                handle = session.generate_reply(user_input=text)
+            kwargs: dict[str, Any] = {"user_input": text}
+            preload_ctx = await rag.get(text)   # در thread + timeout؛ event loop آزاد می‌ماند
+            if preload_ctx:
+                kwargs["instructions"] = f"دانش مرتبط از پایگاه شرکت (فقط از همین استفاده کن):\n{preload_ctx}"
+            handle = session.generate_reply(**kwargs)
             await handle
-            if handle.exception():
-                exc = handle.exception()
+            exc = _handle_exception(handle)
+            if exc:
                 body = str(getattr(exc, "body", "") or str(exc))
                 if "array not in string" in body:
                     job_logger.warning("Text reply با ابزار شکست خورد — یک بار بدون ابزار تلاش می‌کنم")
-                    retry = session.generate_reply(user_input=text)
+                    try:
+                        retry = session.generate_reply(user_input=text, tool_choice="none")
+                    except TypeError:
+                        retry = session.generate_reply(user_input=text)
                     await retry
-                    if retry.exception():
-                        job_logger.error("Text chat retry هم شکست: %s", retry.exception())
+                    r_exc = _handle_exception(retry)
+                    if r_exc:
+                        job_logger.error("Text chat retry هم شکست: %s", r_exc)
                     return
                 job_logger.error("Text chat reply failed: %s", exc)
         except Exception:
             job_logger.exception("Could not generate reply to text chat")
 
     def on_room_data_received(packet: rtc.DataPacket) -> None:
-        if packet.topic != "chat-input": return
+        if packet.topic != "chat-input":
+            return
         try:
             message = json.loads(packet.data.decode("utf-8"))
-            if message.get("type") != "chat_input": return
-            text = str(message.get("text","")).strip()[:4000]
-            if not text: return
+            if message.get("type") != "chat_input":
+                return
+            text = str(message.get("text", "")).strip()[:4000]
+            if not text:
+                return
             sender = packet.participant.identity if packet.participant else "unknown"
-            asyncio.create_task(respond_to_text(text, sender))
+            spawn(respond_to_text(text, sender))
         except Exception:
             job_logger.exception("Invalid text chat data packet")
+
     ctx.room.on("data_received", on_room_data_received)
 
-    await session.start(agent=PersianAssistant(knowledge_tool=knowledge_tool, latency_tracker=latency), room=ctx.room, room_output_options=RoomOutputOptions(audio_enabled=avatar is None))
+    await session.start(agent=assistant, room=ctx.room,
+                        room_output_options=RoomOutputOptions(audio_enabled=avatar is None))
     job_logger.info("Agent session started and ready for voice or text input")
 
+    # ── greeting ──
     try:
         metadata = json.loads(ctx.job.metadata or "{}")
     except (json.JSONDecodeError, TypeError):
-        metadata={}
-    opening_line = str(metadata.get("opening_line","")).strip()[:300]
-    # greeting را با user_input می‌فرستیم تا فیلتر thinking آن را نخورد و LLM حتماً صدا زده شود
+        metadata = {}
+    opening_line = str(metadata.get("opening_line", "")).strip()[:300]
+
     if opening_line:
-        greeting_handle = session.generate_reply(user_input=opening_line, instructions="به فارسی گرم و کوتاه سلام کن و به خواسته کاربر پاسخ بده.")
+        # متن متغیر → به LLM نیاز دارد
+        greeting_handle = session.generate_reply(user_input=opening_line,
+                                                 instructions="به فارسی گرم و کوتاه سلام کن و به خواسته کاربر پاسخ بده.")
+    elif cfg.greeting_mode == "llm":
+        greeting_handle = session.generate_reply(user_input="سلام",
+                                                 instructions="به فارسی گرم و کوتاه سلام کن و بپرس امروز چطور می‌توانی کمک کنی.")
     else:
-        greeting_handle = session.generate_reply(user_input="سلام", instructions="به فارسی گرم و کوتاه سلام کن و بپرس امروز چطور می‌توانی کمک کنی.")
-    # اگر greeting خطا داد (مثلاً gpt-oss با reasoning)، لاگ کن — قبلاً ساکت fail می‌شد
-    def _log_greeting_error(task):
-        try:
-            exc = task.exception()
-            if exc:
-                job_logger.error("Greeting LLM failed (%s): %s — مدل را به gpt-4o-mini عوض کنید", type(exc).__name__, exc)
-        except Exception:
-            pass
+        # greeting ثابت: بدون رفت‌وبرگشت LLM، فقط TTS
+        greeting_handle = session.say(cfg.greeting_text, allow_interruptions=True)
+
+    def _log_greeting_error(handle: Any) -> None:
+        exc = _handle_exception(handle)
+        if exc:
+            job_logger.error("Greeting failed (%s): %s — مدل را به gpt-4o-mini عوض کنید", type(exc).__name__, exc)
+
     try:
         greeting_handle.add_done_callback(_log_greeting_error)
     except Exception:
         pass
 
+
 # export server — SDK expects entrypoint_fnc (LiveKit Agents >=1.0)
+_agent_name = os.getenv("LIVEKIT_AGENT_NAME", "sam-voice-agent")
 try:
-    server = agents.WorkerOptions(entrypoint_fnc=entrypoint, agent_name=os.getenv("LIVEKIT_AGENT_NAME", "sam-voice-agent"))
+    # initialize_process_timeout پیش‌فرض ۱۰ ثانیه است؛ لود Chroma/BM25 در prewarm (مخصوصاً روی Windows)
+    # می‌تواند از آن بیشتر شود و process کشته شود.
+    server = agents.WorkerOptions(
+        entrypoint_fnc=entrypoint,
+        prewarm_fnc=prewarm,
+        agent_name=_agent_name,
+        initialize_process_timeout=_env_float("LIVEKIT_INIT_PROCESS_TIMEOUT", 60.0),
+    )
 except TypeError:
-    # fallback for very old SDK that used `entrypoint`
-    server = agents.WorkerOptions(entrypoint=entrypoint, agent_name=os.getenv("LIVEKIT_AGENT_NAME", "sam-voice-agent"))  # type: ignore[arg-type]
+    try:
+        server = agents.WorkerOptions(entrypoint_fnc=entrypoint, prewarm_fnc=prewarm, agent_name=_agent_name)
+    except TypeError:
+        # fallback for very old SDK that used `entrypoint`
+        server = agents.WorkerOptions(entrypoint=entrypoint, agent_name=_agent_name)  # type: ignore[arg-type]

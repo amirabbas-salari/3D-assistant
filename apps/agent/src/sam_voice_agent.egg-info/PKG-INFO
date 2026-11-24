@@ -1,0 +1,47 @@
+Metadata-Version: 2.4
+Name: sam-voice-agent
+Version: 1.0.0
+Summary: Persian LiveKit voice agent (سام) — RAG + avatar + latency instrumentation
+Requires-Python: >=3.10
+Description-Content-Type: text/markdown
+Requires-Dist: livekit-agents~=1.8
+Requires-Dist: livekit-plugins-openai~=1.8
+Requires-Dist: livekit-plugins-deepgram~=1.8
+Requires-Dist: livekit-plugins-google~=1.8
+Requires-Dist: livekit-plugins-spatius~=1.8
+Requires-Dist: livekit-plugins-did~=1.8
+Requires-Dist: python-dotenv>=1.0.0
+Requires-Dist: chromadb>=1.0.0
+Requires-Dist: openai>=1.0.0
+Requires-Dist: aiohttp>=3.9.0
+Provides-Extra: dev
+Requires-Dist: ruff>=0.8.0; extra == "dev"
+Requires-Dist: pytest>=8.0; extra == "dev"
+Requires-Dist: pyright>=1.1; extra == "dev"
+
+# Agent — Python LiveKit Voice Agent
+
+Canonical source is `src/sam/`:
+
+```
+src/sam/
+├── agent.py        # entrypoint, AgentServer, turn-handling
+├── assistant.py    # PersianAssistant prompt (future split)
+├── avatar.py       # avatar providers
+├── speech.py       # STT/TTS builders
+├── latency/        # per-turn millisecond instrumentation
+│   └── tracker.py
+└── rag/            # BM25 + Chroma retrieval
+    └── engine.py
+```
+
+Legacy flat files at repo root (`agent.py`, `rag.py`, `latency.py`) are shims that
+re-export this package for backward compatibility.
+
+```bash
+# from repo root
+python agent.py dev
+# or from this folder
+pip install -e .
+python -m sam.agent dev
+```

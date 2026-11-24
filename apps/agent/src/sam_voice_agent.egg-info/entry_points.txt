@@ -1,0 +1,2 @@
+[console_scripts]
+sam-agent = sam.agent:main
