@@ -5,7 +5,7 @@ from livekit.agents import APIConnectOptions, AgentSession, RoomOutputOptions, S
 from livekit.plugins import openai
 
 from ..config.env import flag
-from ..config.llm import llm_request_body
+from ..config.llm import llm_request_body, llm_provider, llm_model as resolve_llm_model, llm_max_tokens as resolve_llm_max_tokens, llm_api_key as resolve_llm_api_key, llm_base_url as resolve_llm_base_url, llm_extra_headers, validate_llm_config
 from ..config.speed import speed_profile
 from ..speech.providers import speech_provider, stt_provider, tts_provider, validate_speech_config
 from ..speech.stt import build_stt, build_tts
@@ -47,18 +47,18 @@ async def entrypoint(ctx: agents.JobContext) -> None:
     stt_model = os.getenv("LIVEKIT_STT_MODEL", "deepgram/nova-3")
     stt_language = os.getenv("LIVEKIT_STT_LANGUAGE", "fa")
     stt_fallback_models = [i.strip() for i in os.getenv("LIVEKIT_STT_FALLBACK","").split(",") if i.strip()]
-    cloudflare_account_id = os.getenv("CLOUDFLARE_ACCOUNT_ID","").strip()
-    cloudflare_api_token = os.getenv("CLOUDFLARE_API_TOKEN","").strip()
-    llm_model = os.getenv("CLOUDFLARE_LLM_MODEL","").strip()
+    # LLM: OpenRouter (preferred) or Cloudflare — unified via config/llm.py
     try:
-        llm_max_tokens = int(os.getenv("CLOUDFLARE_LLM_MAX_TOKENS","400"))
-    except ValueError as exc:
-        raise RuntimeError("CLOUDFLARE_LLM_MAX_TOKENS must be a positive integer") from exc
+        llm_prov, llm_model, llm_base_url = validate_llm_config(job_logger)
+    except RuntimeError as exc:
+        # give actionable message for OpenRouter onboarding
+        raise RuntimeError(str(exc) + " — برای OpenRouter: OPENROUTER_API_KEY را از https://openrouter.ai/settings/keys بگیرید و در .env بگذارید.") from exc
+    llm_api_key = resolve_llm_api_key()
+    llm_max_tokens = resolve_llm_max_tokens()
     if not 1 <= llm_max_tokens <= 24000:
-        raise RuntimeError("CLOUDFLARE_LLM_MAX_TOKENS must be between 1 and 24000")
-    if not cloudflare_account_id or not cloudflare_api_token:
-        raise RuntimeError("CLOUDFLARE_ACCOUNT_ID and CLOUDFLARE_API_TOKEN are required for Cloudflare Workers AI")
-    cloudflare_base_url = f"https://api.cloudflare.com/client/v4/accounts/{cloudflare_account_id}/ai/v1"
+        raise RuntimeError("LLM_MAX_TOKENS must be between 1 and 24000")
+    llm_headers = llm_extra_headers()
+    job_logger.info("LLM resolved: provider=%s model=%s max_tokens=%s base=%s", llm_prov, llm_model, llm_max_tokens, llm_base_url)
 
     livekit_tts_model = os.getenv("LIVEKIT_TTS_MODEL", "google/gemini-3.8-flash-lite-tts").strip()
     livekit_tts_voice = os.getenv("LIVEKIT_TTS_VOICE", "Charon").strip() or "Charon"
@@ -282,19 +282,31 @@ async def entrypoint(ctx: agents.JobContext) -> None:
 
     extra_body = llm_request_body(llm_max_tokens, job_logger, model=llm_model)
 
-    # هشدار مدل کند: gpt-oss برای voice مناسب نیست (TTFT 1-5s)
-    if "gpt-oss" in llm_model.lower():
-        job_logger.warning("LLM=%s کند است (TTFT 1-5s). برای <1s از @cf/meta/llama-3.3-70b-instruct-fp8-fast یا @cf/meta/llama-3.1-8b-instruct استفاده کنید", llm_model)
+    # هشدار مدل کند: gpt-oss / reasoning برای voice مناسب نیست (TTFT 1-5s)
+    if "gpt-oss" in llm_model.lower() or "deepseek-r1" in llm_model.lower() or "o1" in llm_model.lower():
+        job_logger.warning("LLM=%s کند است (TTFT 1-5s, reasoning). برای <1s از openai/gpt-4o-mini یا google/gemini-2.0-flash-001 یا meta-llama/llama-3.3-70b-instruct استفاده کنید", llm_model)
     # تذکر max_tokens بالا = تاخیر بیشتر (هر توکن اضافی = زمان)
     if llm_max_tokens > 200:
         job_logger.info("LLM max_tokens=%s بالا است؛ برای voice کمتر از 150 توصیه می‌شود (هر 10 توکن ~80ms)", llm_max_tokens)
 
     # openai.LLM creation بلوکه‌کننده است (SSL context ~3s روی Windows) — به thread offload کن
+    # پشتیبانی از extra headers برای OpenRouter (HTTP-Referer/X-Title) اگر SDK بپذیرد
+    def _make_llm():
+        kwargs = dict(model=llm_model, api_key=llm_api_key, base_url=llm_base_url, extra_body=extra_body)
+        # try to pass headers if provider is openrouter and SDK supports it
+        if llm_headers:
+            # livekit-plugins-openai supports extra_headers / default_headers in newer versions
+            for hk in ("extra_headers", "default_headers", "headers"):
+                try:
+                    return openai.LLM(**{**kwargs, hk: llm_headers})
+                except TypeError:
+                    continue
+        return openai.LLM(**kwargs)
     try:
-        _llm = await asyncio.to_thread(lambda: openai.LLM(model=llm_model, api_key=cloudflare_api_token, base_url=cloudflare_base_url, extra_body=extra_body))
+        _llm = await asyncio.to_thread(_make_llm)
     except Exception as e:
         job_logger.warning("LLM init از thread شکست خورد (%s) — fallback به ساخت مستقیم", e)
-        _llm = openai.LLM(model=llm_model, api_key=cloudflare_api_token, base_url=cloudflare_base_url, extra_body=extra_body)
+        _llm = _make_llm()
 
     session = AgentSession(
         stt=stt,

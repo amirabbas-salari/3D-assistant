@@ -20,17 +20,30 @@ export function sttProvider() {
 export function ttsProvider() {
   const raw = String(process.env.TTS_PROVIDER ?? '').trim().toLowerCase();
   if (!raw) {
-    if (['1','true','yes','on'].includes(String(process.env.CLOUDFLARE_TTS_ENABLED ?? '').trim().toLowerCase())) return 'cloudflare';
+    if (['1','true','yes','on'].includes(String(process.env.OPENROUTER_TTS_ENABLED ?? process.env.CLOUDFLARE_TTS_ENABLED ?? '').trim().toLowerCase())) return 'openrouter';
     const p = String(process.env.SPEECH_PROVIDER ?? 'inference').trim().toLowerCase();
-    if (['cloudflare','cf','elevenlabs','eleven-v3','eleven_v3','elevenlabs/eleven-v3'].includes(p)) return 'cloudflare';
+    if (['openrouter','or','elevenlabs','eleven-v3-conversational','elevenlabs/eleven-v3-conversational'].includes(p)) return 'openrouter';
+    if (['cloudflare','cf','eleven-v3','eleven_v3','elevenlabs/eleven-v3'].includes(p)) return 'openrouter'; // legacy → openrouter
     return speechProvider();
   }
-  if (['cloudflare','cf','elevenlabs','eleven-v3','eleven_v3','elevenlabs/eleven-v3'].includes(raw)) return 'cloudflare';
+  if (['openrouter','or','open_router','elevenlabs/eleven-v3-conversational','eleven-v3-conversational'].includes(raw)) return 'openrouter';
+  if (['cloudflare','cf','elevenlabs','eleven-v3','eleven_v3','elevenlabs/eleven-v3'].includes(raw)) return 'openrouter';
   if (['direct','byok','provider','own-keys'].includes(raw)) return 'direct';
   return 'inference';
 }
 export function cloudflareTtsConfigured() {
-  return Boolean(process.env.CLOUDFLARE_ACCOUNT_ID && process.env.CLOUDFLARE_API_TOKEN);
+  return Boolean(process.env.OPENROUTER_API_KEY);
+}
+export function openrouterConfigured() {
+  return Boolean(process.env.OPENROUTER_API_KEY);
+}
+export function llmProvider() {
+  const raw = String(process.env.LLM_PROVIDER ?? '').trim().toLowerCase();
+  if (['openrouter','or','open_router'].includes(raw)) return 'openrouter';
+  if (['cloudflare','cf','workers','workers-ai'].includes(raw)) return 'cloudflare';
+  if (process.env.OPENROUTER_API_KEY) return 'openrouter';
+  if (process.env.CLOUDFLARE_API_TOKEN && process.env.CLOUDFLARE_ACCOUNT_ID) return 'cloudflare';
+  return 'openrouter';
 }
 export function speechConfigured() {
   if (speechProvider() === 'direct') return Boolean(process.env.DEEPGRAM_API_KEY && process.env.GOOGLE_API_KEY);
@@ -39,7 +52,11 @@ export function speechConfigured() {
 export function didConfigured() { return Boolean(process.env.DID_API_KEY && process.env.DID_AGENT_ID); }
 export function spatiusConfigured() { return Boolean(process.env.SPATIUS_API_KEY && process.env.SPATIUS_APP_ID && process.env.SPATIUS_AVATAR_ID); }
 export function isConfigured() {
-  const voice = Boolean(process.env.LIVEKIT_URL && process.env.LIVEKIT_API_KEY && process.env.LIVEKIT_API_SECRET && process.env.CLOUDFLARE_ACCOUNT_ID && process.env.CLOUDFLARE_API_TOKEN && speechConfigured());
+  const hasLlm = Boolean(
+    (process.env.OPENROUTER_API_KEY) ||
+    (process.env.CLOUDFLARE_ACCOUNT_ID && process.env.CLOUDFLARE_API_TOKEN)
+  );
+  const voice = Boolean(process.env.LIVEKIT_URL && process.env.LIVEKIT_API_KEY && process.env.LIVEKIT_API_SECRET && hasLlm && speechConfigured());
   if (!voice) return false;
   const provider = avatarProvider();
   if (provider === 'none') return true;
