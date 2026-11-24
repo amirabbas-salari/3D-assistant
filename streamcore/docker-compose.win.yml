@@ -1,0 +1,18 @@
+# هیبرید ویندوز: فقط streamcore-server داخل Docker، agent لوکال روی 8000
+# go run . روی ویندوز کامپایل نمیشه (procstat → syscall.Getrusage فقط لینوکس)
+# پس: ترمینال 1 → uvicorn لوکال، ترمینال 2 → این کامپوز
+services:
+  streamcore-server:
+    image: ghcr.io/streamcoreai/streamcore-server:latest
+    ports:
+      - "8080:8080"
+      - "3478:3478/udp"
+      - "3478:3478/tcp"
+      - "50001-60000:50001-60000/udp"
+    volumes:
+      - ./config.docker-host.toml:/config.toml:ro
+    env_file:
+      - ../.env
+    extra_hosts:
+      - "host.docker.internal:host-gateway"
+    restart: unless-stopped
