@@ -3,12 +3,12 @@
  * Frontend: wss://<worker>.workers.dev  →  wss://horno-avatar-jr68tfeq.livekit.cloud
  * Backend MUST use LIVEKIT_API_URL=https://horno-avatar-jr68tfeq.livekit.cloud directly.
  *
- * CRITICAL: Do not construct a new Response for WebSocket upgrades.
- * Workers must return fetch(upstreamRequest) directly to preserve 101 Switching
- * Protocols, binary Protobuf frames, and message ordering. Wrapping in
- * new Response(..., {webSocket}) mangles binary → Blob → "[object Blob]" JSON error
- * in livekit-client's parseSignalResponse (utils.mjs:29 JSON.parse(value)).
+ * Transparent proxy: do not parse Protobuf/JSON. Preserve binary+text, ordering, close/error.
+ * Uses WebSocketPair manual bridge per https://developers.cloudflare.com/workers/examples/websockets/
+ * Previous bug: `new Response(body,{webSocket})` drops 101 and coerces binary Blob → String "[object Blob]"
+ * → livekit-client parseSignalResponse JSON.parse failure (utils.mjs:29).
  */
+
 export default {
   async fetch(request, env) {
     const url = new URL(request.url);
@@ -36,17 +36,59 @@ export default {
       upstreamUrl.hostname = livekitHost;
       upstreamUrl.protocol = "https:";
       upstreamUrl.port = "";
-      // Must preserve all WS handshake headers verbatim; do not wrap Response.
+
+      // Create a pair: client = returned to browser, server = we drive to upstream
+      const pair = new WebSocketPair();
+      const [client, server] = Object.values(pair);
+      server.accept();
+
+      // Fetch upstream WS — Cloudflare returns 101 with webSocket
       const upstreamRequest = new Request(upstreamUrl.toString(), request);
       upstreamRequest.headers.set("host", livekitHost);
       upstreamRequest.headers.set("x-forwarded-host", url.hostname);
       const ip = request.headers.get("cf-connecting-ip");
       if (ip) upstreamRequest.headers.set("x-real-ip", ip);
-      // Do NOT add webSocket to init; return fetch directly per CF docs:
-      // https://developers.cloudflare.com/workers/examples/websockets/#reverse-proxies--forwarding-websockets
-      return fetch(upstreamRequest);
+
+      let upstreamResp;
+      try {
+        upstreamResp = await fetch(upstreamRequest);
+      } catch (err) {
+        try { server.close(1011, "upstream fetch failed"); } catch {}
+        return jsonError(502, "WebSocket upstream fetch failed", err, allowedOrigins, request);
+      }
+
+      const upstreamWs = upstreamResp.webSocket;
+      if (!upstreamWs) {
+        // Not a WS upgrade — return HTTP response (with CORS) as-is
+        const headers = new Headers(upstreamResp.headers);
+        for (const [k, v] of Object.entries(corsHeaders(allowedOrigins, request))) headers.set(k, v);
+        return new Response(upstreamResp.body, { status: upstreamResp.status, statusText: upstreamResp.statusText, headers });
+      }
+
+      upstreamWs.accept();
+
+      // Bidirectional relay — preserve binary/text verbatim, no JSON.parse/stringify
+      const relay = (from, to, label) => {
+        from.addEventListener("message", (event) => {
+          try { to.send(event.data); } catch (e) {
+            // Diagnostic without payload: log type only
+            console.log(`[worker] relay ${label} send failed:`, e instanceof Error ? e.message : String(e));
+          }
+        });
+        from.addEventListener("close", (event) => {
+          try { to.close(event.code, event.reason); } catch {}
+        });
+        from.addEventListener("error", () => {
+          try { to.close(1011, `${label} error`); } catch {}
+        });
+      };
+      relay(server, upstreamWs, "browser→upstream");
+      relay(upstreamWs, server, "upstream→browser");
+
+      return new Response(null, { status: 101, webSocket: client });
     }
 
+    // HTTP paths (validate, rtc health) — allow only LiveKit signaling, add CORS
     const ALLOWED_HTTP_PREFIXES = ["/rtc", "/cluster", "/validate", "/health"];
     const isAllowedHttp = ALLOWED_HTTP_PREFIXES.some((p) => url.pathname.startsWith(p));
     if (!isAllowedHttp && url.pathname !== "/" && url.pathname !== "") {
