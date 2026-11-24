@@ -1,0 +1,97 @@
+[
+  {
+    "path": "README.md",
+    "bytes": 2918,
+    "sha256": "b8aba6899ed88beec4c8d77f7fc584c224ad6a51481ebbcef693f66692caf94e"
+  },
+  {
+    "path": "data/processed/conversations/conversations.jsonl",
+    "bytes": 14176,
+    "sha256": "33ac4f822aa1765c432756cc2816fa132ad2a0e4baf8243cf6dc9bc92a8dae95"
+  },
+  {
+    "path": "data/processed/documents/documents.jsonl",
+    "bytes": 31590,
+    "sha256": "082d2b619160d2d0faed1f22f5e15a3d2253f0f85ceb5d8239bd6dc5917b50f7"
+  },
+  {
+    "path": "evaluation/phase1_test_cases.jsonl",
+    "bytes": 1626,
+    "sha256": "3ec4d5c3d6b57f55483c33d569c8b846debca0a75b5d647760edcb48d5417833"
+  },
+  {
+    "path": "knowledge_base/en/crm/en-crm-001.md",
+    "bytes": 1476,
+    "sha256": "307af69f63fa519cc67093d233252ebe759cdb2f13b6d41da99304ad2529be30"
+  },
+  {
+    "path": "knowledge_base/en/crm/en-crm-002.md",
+    "bytes": 1384,
+    "sha256": "9a9a67bbc2c337a7928858f50cba965cc9d53e778789a3430bcbdb1eb5ac54a8"
+  },
+  {
+    "path": "knowledge_base/en/sales/en-sales-001.md",
+    "bytes": 2134,
+    "sha256": "797b683b9179d49b30973bb7633aedeebe6cf1ebce15f2175e9ab6bfc5135bcc"
+  },
+  {
+    "path": "knowledge_base/en/sales/en-sales-002.md",
+    "bytes": 1597,
+    "sha256": "4784bfdfec6ab179225a038df0707d8cd576bd32e0dc9820acf6e8d410d5aebf"
+  },
+  {
+    "path": "knowledge_base/en/sales/en-sales-003.md",
+    "bytes": 1652,
+    "sha256": "5f63d8fa7ed6c1a25764703c9f9fda85b328ee097cd48ed605b18113b77b68b6"
+  },
+  {
+    "path": "knowledge_base/fa/crm/fa-crm-001.md",
+    "bytes": 2828,
+    "sha256": "07aff77274c2ebef53461f01233de124b1b4fab8131d57991e7765a102deebb5"
+  },
+  {
+    "path": "knowledge_base/fa/crm/fa-crm-002.md",
+    "bytes": 2468,
+    "sha256": "f062454f805315b541b565ff652c3a7b52c2d74672a2b50ceaea9d761918c6a1"
+  },
+  {
+    "path": "knowledge_base/fa/sales/fa-sales-001.md",
+    "bytes": 3913,
+    "sha256": "938601deba5eb1e461a9149f4767280f2f3695e187934c561ee6d192b8ce272e"
+  },
+  {
+    "path": "knowledge_base/fa/sales/fa-sales-002.md",
+    "bytes": 3239,
+    "sha256": "9dc4670701fa75eb62df8f0b44f69d6c9d8d4847e19f2f726f7d18615fb5783b"
+  },
+  {
+    "path": "knowledge_base/fa/sales/fa-sales-003.md",
+    "bytes": 3357,
+    "sha256": "878114b452a9973237d8aea8e7600f51627ff36f33e4c50e9cb7e50365cd46fb"
+  },
+  {
+    "path": "knowledge_base/fa/sales/fa-sales-004.md",
+    "bytes": 2687,
+    "sha256": "74b5e0cf275949c1272391ff2d151598ec6a8d741ba6164da06af0b72b247ba7"
+  },
+  {
+    "path": "metadata/data_card.json",
+    "bytes": 863,
+    "sha256": "ab7e3706f4e316a37a91e2cf2ee37afee09d8795b5bb63b9876b393e6a375986"
+  },
+  {
+    "path": "metadata/sources.json",
+    "bytes": 4673,
+    "sha256": "5a86e4b9a8aa72fba9f17ef9a0f8ada1f3797bfa89d99f4797098af2d9e959dc"
+  },
+  {
+    "path": "metadata/taxonomy.json",
+    "bytes": 797,
+    "sha256": "29601f8002d82cac80f913f53ab9708ca6f9f7ec47d634a216271b3ab92a6d8d"
+  },
+  {
+    "path": "schemas/conversation.schema.json",
+    "bytes": 1058,
+    "sha256": "c6719ec059ec9156ef2c4b9c9228b8b76ae988741e1c7502641045473c89bbfe"
+  }
+]

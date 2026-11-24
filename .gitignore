@@ -13,3 +13,4 @@ apps/web/dist
 .coverage
 .pytest_cache/
 ruff_cache/
+agency_ai_dataset*.zip

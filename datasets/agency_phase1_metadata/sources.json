@@ -1,0 +1,110 @@
+[
+  {
+    "source_id": "SRC-HS-DISCOVERY",
+    "title": "How to Run a Discovery Call",
+    "publisher": "HubSpot",
+    "url": "https://blog.hubspot.com/sales/discovery-call-questions",
+    "domain": "sales",
+    "language": "en",
+    "source_type": "professional_guide",
+    "usage_note": "Use as a conceptual reference; do not republish source text. Independently authored summaries and workflows only.",
+    "license_status": "review_required",
+    "accessed": "2026-11-24"
+  },
+  {
+    "source_id": "SRC-HS-PROSPECT",
+    "title": "Sales prospecting funnel: A primer for sales and revenue teams",
+    "publisher": "HubSpot",
+    "url": "https://blog.hubspot.com/sales/sales-prospecting-funnel",
+    "domain": "sales",
+    "language": "en",
+    "source_type": "professional_guide",
+    "usage_note": "Conceptual reference for discovery-first qualification and documented handoffs; verify current terms before deployment.",
+    "license_status": "review_required",
+    "accessed": "2026-11-24"
+  },
+  {
+    "source_id": "SRC-SF-LEAD",
+    "title": "Configure Lead Management",
+    "publisher": "Salesforce Help",
+    "url": "https://help.salesforce.com/s/articleView?id=customize_leadmgmt.htm&language=en_US&type=5",
+    "domain": "crm",
+    "language": "en",
+    "source_type": "official_product_documentation",
+    "usage_note": "Reference for lead fields, assignment, capture and status configuration. No copied documentation text.",
+    "license_status": "review_required",
+    "accessed": "2026-11-24"
+  },
+  {
+    "source_id": "SRC-SF-PROCESS",
+    "title": "Create Processes for Deal Registration",
+    "publisher": "Salesforce Help",
+    "url": "https://help.salesforce.com/s/articleView?id=experience.networks_lead_process_deal_reg.htm&language=en_US&type=5",
+    "domain": "crm",
+    "language": "en",
+    "source_type": "official_product_documentation",
+    "usage_note": "Reference for configuring lead/opportunity stages to fit a business process.",
+    "license_status": "review_required",
+    "accessed": "2026-11-24"
+  },
+  {
+    "source_id": "SRC-MS-SMB",
+    "title": "A Guide to Small Business Marketing Strategy",
+    "publisher": "Microsoft",
+    "url": "https://www.microsoft.com/en-us/microsoft-365/business-insights-ideas/resources/small-business-marketing",
+    "domain": "sales",
+    "language": "en",
+    "source_type": "professional_guide",
+    "usage_note": "Reference for audience, goals, channel focus and measurement; adapt rather than copy.",
+    "license_status": "review_required",
+    "accessed": "2026-11-24"
+  },
+  {
+    "source_id": "SRC-GADS-SMB",
+    "title": "How to market your business",
+    "publisher": "Google Business",
+    "url": "https://business.google.com/us/resources/articles/small-business-marketing/",
+    "domain": "sales",
+    "language": "en",
+    "source_type": "official_business_guide",
+    "usage_note": "Reference for marketing goals, audience, budget, funnel and measurable outcomes.",
+    "license_status": "review_required",
+    "accessed": "2026-11-24"
+  },
+  {
+    "source_id": "SRC-IRANNET",
+    "title": "بازاریابی دیجیتال برای کسب‌وکار؛ از سایت تا جذب مشتری و فروش",
+    "publisher": "ایران نت",
+    "url": "https://irannet.net/guides/digital-marketing/",
+    "domain": "sales_crm",
+    "language": "fa",
+    "source_type": "local_industry_article",
+    "usage_note": "Iranian-market contextual reference. Verify claims and editorial independence; do not treat as a neutral standard or copy text.",
+    "license_status": "review_required",
+    "accessed": "2026-11-24"
+  },
+  {
+    "source_id": "SRC-CAMPINO",
+    "title": "چگونه آژانس دیجیتال مارکتینگ انتخاب کنیم؟",
+    "publisher": "کمپینو",
+    "url": "https://campino.agency/blog/choose-digital-marketing-agency/",
+    "domain": "sales",
+    "language": "fa",
+    "source_type": "local_industry_article",
+    "usage_note": "Local-market context for agency briefing, measurable outcomes, ownership and pilot framing; independently authored summary.",
+    "license_status": "review_required",
+    "accessed": "2026-11-24"
+  },
+  {
+    "source_id": "SRC-AINIROO",
+    "title": "چطور سوالات صلاحیت سنجی لید را طراحی کنیم",
+    "publisher": "Ainiroo",
+    "url": "https://ainiroo.ir/lead-qualification-questions/",
+    "domain": "sales",
+    "language": "fa",
+    "source_type": "local_industry_article",
+    "usage_note": "Local-language reference for need, budget, decision role and urgency questions. Independently authored synthesis.",
+    "license_status": "review_required",
+    "accessed": "2026-11-24"
+  }
+]
