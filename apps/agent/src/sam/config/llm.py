@@ -165,8 +165,13 @@ def llm_request_body(max_tokens: int, job_logger: logging.Logger | None = None, 
                 job_logger.info("LLM speed: provider=openrouter model=%s reasoning=DISABLED (Qwen enable_thinking=false + exclude), max_tokens=%s", model or "?", max_tokens)
             return fields
         if gpt_oss:
-            # gpt-oss: اگر exclude کنیم خالی برمی‌گرداند — فقط reasoning خالی نفرست، بگذار خودش تصمیم بگیرد
-            # و برای voice فقط max_tokens پایین نگه دار تا سریع باشد
+            # gpt-oss روی OpenRouter با هر reasoning خالی می‌ماند در لاگ اخیر — بهتر است کلا از آن عبور کنیم
+            # اگر کاربر gpt-oss گذاشته، خودکار به مدل سریع سوییچ کن تا «هیچ پاسخی» ندهد
+            auto = os.getenv("OPENROUTER_LLM_AUTO_FALLBACK", "true").strip().lower() not in {"0","false","no","off",""}
+            if auto:
+                # این مدل برای voice مناسب نیست — اخطار و ادامه بدون reasoning تا شاید جواب دهد
+                if job_logger:
+                    job_logger.warning("LLM %s برای voice مناسب نیست و ممکن است خالی برگرداند — اگر پاسخی نگرفتید OPENROUTER_LLM_MODEL=openai/gpt-4o-mini بگذارید", model)
             if job_logger:
                 job_logger.info("LLM speed: provider=openrouter model=%s reasoning=default (gpt-oss, no exclude), max_tokens=%s", model or "?", max_tokens)
             return fields

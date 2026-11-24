@@ -415,7 +415,11 @@ async def entrypoint(ctx: agents.JobContext) -> None:
             else:
                 job_logger.error("TTS 402: %s — credits exhausted. Set TTS_PROVIDER=inference to fallback.", error)
             return
-        job_logger.error("AgentSession %s error: %s", event.source, error)
+        # OpenRouter LLM 401/402/429/500 — قبلاً ساکت می‌ماند و «هیچ پاسخی» به نظر می‌رسید
+        if status in (401, 402, 403, 429, 500, 502, 503):
+            job_logger.error("LLM %s error %s: %s — کلید OPENROUTER_API_KEY و اعتبار و مدل (%s) را چک کنید", event.source, status, body_str[:600], llm_model)
+            return
+        job_logger.error("AgentSession %s error: %s (body=%s)", event.source, error, body_str[:800])
 
     async def publish_latency_msg() -> None:
         await publish_room_message(ctx, {"type":"latency", **latency.as_dict()}, topic="diagnostics")
@@ -581,8 +585,23 @@ async def entrypoint(ctx: agents.JobContext) -> None:
     except (json.JSONDecodeError, TypeError):
         metadata={}
     opening_line = str(metadata.get("opening_line","")).strip()[:300]
-    greeting = f"به فارسی سلام کن و به این خواسته پاسخ بده: {opening_line}" if opening_line else "به فارسی گرم و کوتاه سلام کن و بپرس امروز چطور می‌توانی کمک کنی."
-    session.generate_reply(instructions=greeting)
+    # greeting را با user_input می‌فرستیم تا فیلتر thinking آن را نخورد و LLM حتماً صدا زده شود
+    if opening_line:
+        greeting_handle = session.generate_reply(user_input=opening_line, instructions="به فارسی گرم و کوتاه سلام کن و به خواسته کاربر پاسخ بده.")
+    else:
+        greeting_handle = session.generate_reply(user_input="سلام", instructions="به فارسی گرم و کوتاه سلام کن و بپرس امروز چطور می‌توانی کمک کنی.")
+    # اگر greeting خطا داد (مثلاً gpt-oss با reasoning)، لاگ کن — قبلاً ساکت fail می‌شد
+    def _log_greeting_error(task):
+        try:
+            exc = task.exception()
+            if exc:
+                job_logger.error("Greeting LLM failed (%s): %s — مدل را به gpt-4o-mini عوض کنید", type(exc).__name__, exc)
+        except Exception:
+            pass
+    try:
+        greeting_handle.add_done_callback(_log_greeting_error)
+    except Exception:
+        pass
 
 # export server — SDK expects entrypoint_fnc (LiveKit Agents >=1.0)
 try:
