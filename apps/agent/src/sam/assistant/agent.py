@@ -21,6 +21,8 @@ class PersianAssistant(Agent):
         )
         if fast_start:
             instructions += (" فقط ۱ جمله‌ی کوتاه (۵ تا ۹ کلمه) که جواب اصلی توشه + ۱ سوال کوتاه (۳ تا ۷ کلمه). بیشتر از ۲ جمله نشو. مقدمه‌چینی، «حتما»، «سوال خوبیه» ممنوع. هر جمله یه فکر کامل باشه، نه تکه‌تکه.")
+        # جلوگیری از نشت Chain-of-Thought (در لاگ دیده شد: مدل qwen فکر را با Thinking Process نشان داد)
+        instructions += " هرگز فرآیند فکر، تحلیل داخلی، Thinking Process یا Chain-of-Thought را نمایش نده — فقط پاسخ نهایی فارسی کوتاه را بده. تگ <think> یا **Analyze** ننویس."
         # Cloudflare Workers AI (gpt-oss-120b) با ابزار function-calling ناسازگار است و خطای 400
         # "array not in string" می‌دهد. پس به صورت پیش‌فرض ابزار را خاموش می‌کنیم و از preload استفاده می‌کنیم.
         use_tool = False
@@ -56,7 +58,7 @@ class PersianAssistant(Agent):
         super().__init__(instructions=instructions, tools=[knowledge_tool] if (knowledge_tool and use_tool) else [])
 
     async def llm_node(self, chat_ctx, tools, model_settings=None):
-        """حلقه LLM با ثبت مرحله‌ای هر توکن برای گانت چارت + محدودسازی تاریخچه"""
+        """حلقه LLM با ثبت مرحله‌ای هر توکن برای گانت چارت + محدودسازی تاریخچه + فیلتر Thinking"""
         # جلوگیری از رشد بی‌نهایت context: هر نوبت توکن‌ها زیاد می‌شود → TTFT خطی بالا می‌رود
         # chat_ctx را به آخرین N پیام محدود کن (پیش‌فرض 12 = ۶ نوبت)
         try:
@@ -101,6 +103,9 @@ class PersianAssistant(Agent):
                 pass
         # فراخوانی پیاده‌سازی پیش‌فرض Agent
         stream = super().llm_node(chat_ctx, tools, model_settings)
+        # فیلتر نشت Thinking / chain-of-thought (در لاگ qwen دیده شد: "Thinking Process:" به عنوان جواب)
+        _in_think = False
+        _think_markers = ("<think>", "Thinking Process", "Analyze the Request", "**Analysis", "Chain-of-Thought")
         async for chunk in stream:
             if tracker is not None:
                 try:
@@ -111,6 +116,46 @@ class PersianAssistant(Agent):
                         tracker.on_llm_token(text)
                 except Exception:
                     pass
+            # فیلتر Thinking: اگر chunk حاوی تگ فکر است، آن را حذف کن
+            try:
+                delta = getattr(chunk, "delta", None)
+                content = getattr(delta, "content", None) if delta else None
+                if content:
+                    # detect start/end of think block
+                    if "<think>" in content:
+                        _in_think = True
+                        # strip the tag itself and anything before it if it's thinking
+                        # if content is pure think, skip
+                        if content.strip().startswith("<think>"):
+                            continue
+                    if "</think>" in content:
+                        _in_think = False
+                        # skip the tag, but allow content after it
+                        after = content.split("</think>", 1)[-1]
+                        if not after.strip():
+                            continue
+                        # rewrite chunk content without think part
+                        try:
+                            chunk.delta.content = after  # type: ignore
+                        except Exception:
+                            pass
+                        _in_think = False
+                        yield chunk
+                        continue
+                    if _in_think:
+                        continue
+                    # also filter verbose thinking headers (seen in qwen log)
+                    if any(m in content for m in _think_markers):
+                        # if the chunk is purely thinking header, skip
+                        stripped = content.strip()
+                        if stripped.startswith("Thinking") or stripped.startswith("1.") and "Analyze" in stripped:
+                            continue
+                        # if it contains thinking but also real answer, try to strip prefix
+                        # heuristic: skip if it starts with Thinking Process
+                        if content.lstrip().startswith("Thinking Process"):
+                            continue
+            except Exception:
+                pass
             yield chunk
         if tracker is not None:
             try:
