@@ -35,6 +35,18 @@ DEFAULT_MODEL = "elevenlabs/eleven-v3-conversational"
 DEFAULT_RESPONSE_FORMAT = "mp3"
 DEFAULT_BASE_URL = "https://openrouter.ai/api/v1"
 
+# Validated OpenRouter TTS models (2024-2025). Others return 400 Reference not found.
+KNOWN_TTS_MODELS = {
+    "elevenlabs/eleven-v3-conversational",
+    "elevenlabs/eleven-v3",
+    "elevenlabs/eleven-multilingual-v2",
+    "openai/tts-1", "openai/tts-1-hd", "openai/gpt-4o-mini-tts",
+    "google/gemini-2.5-flash-tts", "google/gemini-2.5-pro-tts",
+    "minimax/minimax-speech-02-hd", "minimax/minimax-speech-02-turbo",
+    "qwen/qwen3-tts-flash",
+    "fish-audio/fish-speech-1.5", "fish-audio/fish-speech-1.4",
+}
+
 # Legacy ElevenLabs voice IDs → OpenRouter voice names (for old .env)
 _LEGACY_VOICE_MAP = {
     "JBFqnCBsd6RMkjVDRZzb": "george",
@@ -91,6 +103,19 @@ class OpenRouterTTS(tts.TTS):
         self._base_url = (base_url or os.getenv("OPENROUTER_BASE_URL", DEFAULT_BASE_URL)).strip() or DEFAULT_BASE_URL
         self._base_url = self._base_url.rstrip("/")
         self._model = (model or os.getenv("OPENROUTER_TTS_MODEL", DEFAULT_MODEL)).strip() or DEFAULT_MODEL
+        # Warn if model looks invalid — fish-audio/drama-3 → fish-audio/fish-speech-1.5
+        if self._model == "fish-audio/drama-3":
+            # Common mistake: drama-3 is not on OpenRouter
+            import logging
+            logging.getLogger("sam.speech.openrouter_tts").warning(
+                "OPENROUTER_TTS_MODEL=fish-audio/drama-3 not on OpenRouter (400). Did you mean fish-audio/fish-speech-1.5? See https://openrouter.ai/models?fmt=audio"
+            )
+        if self._model not in KNOWN_TTS_MODELS:
+            import logging
+            # Still allow custom models, just log hint
+            logging.getLogger("sam.speech.openrouter_tts").info(
+                "OPENROUTER_TTS_MODEL=%s not in known list, will try anyway (if 400, check https://openrouter.ai/models?fmt=audio)", self._model
+            )
 
         # Voice — generic: any model can have voice, but don't force it
         raw_voice = (
