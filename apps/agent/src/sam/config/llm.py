@@ -15,7 +15,7 @@ import logging
 # Defaults
 DEFAULT_CLOUDFLARE_MODEL = "@cf/meta/llama-3.3-70b-instruct-fp8-fast"
 DEFAULT_OPENROUTER_MODEL = "openai/gpt-4o-mini"  # fast, cheap, good Persian + tool-calling; alternatives: meta-llama/llama-3.3-70b-instruct, google/gemini-2.0-flash-001
-DEFAULT_MAX_TOKENS = 90  # برای ۲ جمله + سوال؛ توجه: فارسی توکن‌خور است — اگر جواب‌ها نیمه‌کاره بریده شد LLM_MAX_TOKENS=130..150
+DEFAULT_MAX_TOKENS = 120  # برای ۲ جمله + سوال؛ فارسی ~1.3× توکن‌خور است — 90 خیلی کم و جواب‌ها بریده می‌شد؛ 120 تعادل سرعت/کامل بودن
 
 _REASONING_KEYWORDS = ("gpt-oss", "deepseek-r1", "qwen3", "qwen-3", "qwq", "r1-distill", "reasoning", "thinking")
 # o1/o3/o4 فقط وقتی «نام کامل بخش» باشند (openai/o3-mini)، نه داخل gpt-4o-mini یا اعداد

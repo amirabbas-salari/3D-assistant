@@ -17,17 +17,19 @@ export function sttProvider() {
   if (raw) return ['direct','byok','provider','own-keys'].includes(raw) ? 'direct' : 'inference';
   return speechProvider();
 }
+const _ELEVEN = new Set(['elevenlabs','eleven','elevenlabs.io','eleven_flash_v2_5','eleven_flash_v2','eleven_turbo_v2_5','eleven_turbo_v2','eleven_multilingual_v2','eleven_multilingual_v1','eleven_v3','eleven_v4','eleven_v4_turbo']);
+const _OR = new Set(['openrouter','or','open-router','open_router','elevenlabs/eleven-v3-conversational','eleven-v3-conversational','eleven_v3_conversational','conversational','or-conversational','cloudflare','cf','eleven-v3','elevenlabs/eleven-v3']);
 export function ttsProvider() {
   const raw = String(process.env.TTS_PROVIDER ?? '').trim().toLowerCase();
   if (!raw) {
     if (['1','true','yes','on'].includes(String(process.env.OPENROUTER_TTS_ENABLED ?? process.env.CLOUDFLARE_TTS_ENABLED ?? '').trim().toLowerCase())) return 'openrouter';
     const p = String(process.env.SPEECH_PROVIDER ?? 'inference').trim().toLowerCase();
-    if (['openrouter','or','elevenlabs','eleven-v3-conversational','elevenlabs/eleven-v3-conversational'].includes(p)) return 'openrouter';
-    if (['cloudflare','cf','eleven-v3','eleven_v3','elevenlabs/eleven-v3'].includes(p)) return 'openrouter'; // legacy → openrouter
+    if (_ELEVEN.has(p)) return 'elevenlabs';
+    if (_OR.has(p) || ['openrouter','or','elevenlabs','eleven-v3-conversational','elevenlabs/eleven-v3-conversational'].includes(p)) return 'openrouter';
     return speechProvider();
   }
-  if (['openrouter','or','open_router','elevenlabs/eleven-v3-conversational','eleven-v3-conversational'].includes(raw)) return 'openrouter';
-  if (['cloudflare','cf','elevenlabs','eleven-v3','eleven_v3','elevenlabs/eleven-v3'].includes(raw)) return 'openrouter';
+  if (_ELEVEN.has(raw)) return 'elevenlabs';
+  if (_OR.has(raw) || ['openrouter','or','open_router','elevenlabs/eleven-v3-conversational','eleven-v3-conversational'].includes(raw)) return 'openrouter';
   if (['direct','byok','provider','own-keys'].includes(raw)) return 'direct';
   return 'inference';
 }

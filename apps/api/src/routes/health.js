@@ -11,7 +11,7 @@ router.get('/health', (_req, res) => {
     llmModel: _llmProv === 'openrouter'
       ? (process.env.OPENROUTER_LLM_MODEL || process.env.LLM_MODEL || 'openai/gpt-4o-mini')
       : (process.env.CLOUDFLARE_LLM_MODEL || '@cf/meta/llama-3.3-70b-instruct-fp8-fast'),
-    llmMaxTokens: Number(process.env.OPENROUTER_LLM_MAX_TOKENS || process.env.LLM_MAX_TOKENS || process.env.CLOUDFLARE_LLM_MAX_TOKENS || 8192),
+    llmMaxTokens: Number(process.env.OPENROUTER_LLM_MAX_TOKENS || process.env.LLM_MAX_TOKENS || process.env.CLOUDFLARE_LLM_MAX_TOKENS || 120),
     cloudflareConfigured: Boolean(process.env.CLOUDFLARE_ACCOUNT_ID && process.env.CLOUDFLARE_API_TOKEN),
     openrouterConfigured: openrouterConfigured(), openrouterTtsConfigured: openrouterConfigured(), openrouterLlmConfigured: openrouterConfigured(),
     avatarEnabled: avatarEnabled(), avatarProvider: avatarProvider(), didConfigured: didConfigured(), didAgentId: process.env.DID_AGENT_ID || null,
