@@ -41,11 +41,12 @@ export function openrouterConfigured() {
 }
 export function llmProvider() {
   const raw = String(process.env.LLM_PROVIDER ?? '').trim().toLowerCase();
+  if (['livekit','inference','lk','livekit-inference','livekit_inference'].includes(raw)) return 'livekit';
   if (['openrouter','or','open_router'].includes(raw)) return 'openrouter';
   if (['cloudflare','cf','workers','workers-ai'].includes(raw)) return 'cloudflare';
   if (process.env.OPENROUTER_API_KEY) return 'openrouter';
   if (process.env.CLOUDFLARE_API_TOKEN && process.env.CLOUDFLARE_ACCOUNT_ID) return 'cloudflare';
-  return 'openrouter';
+  return 'livekit';
 }
 export function speechConfigured() {
   if (speechProvider() === 'direct') return Boolean(process.env.DEEPGRAM_API_KEY && process.env.GOOGLE_API_KEY);
@@ -54,7 +55,10 @@ export function speechConfigured() {
 export function didConfigured() { return Boolean(process.env.DID_API_KEY && process.env.DID_AGENT_ID); }
 export function spatiusConfigured() { return Boolean(process.env.SPATIUS_API_KEY && process.env.SPATIUS_APP_ID && process.env.SPATIUS_AVATAR_ID); }
 export function isConfigured() {
+  const rawLlm = String(process.env.LLM_PROVIDER ?? '').trim().toLowerCase();
+  const isLivekitLlm = ['livekit','inference','lk','livekit-inference','livekit_inference',''].includes(rawLlm);
   const hasLlm = Boolean(
+    (isLivekitLlm && process.env.LIVEKIT_URL && process.env.LIVEKIT_API_KEY && process.env.LIVEKIT_API_SECRET) ||
     (process.env.OPENROUTER_API_KEY) ||
     (process.env.CLOUDFLARE_ACCOUNT_ID && process.env.CLOUDFLARE_API_TOKEN)
   );
