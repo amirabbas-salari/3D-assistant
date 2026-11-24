@@ -13,15 +13,18 @@ import { errorMessage, messageTime } from '../lib/utils.js';
 import { formatLatency } from '../lib/latency.js';
 import { createLipSync } from '../lipsync.js';
 
+const MAX_CHAT_MESSAGES = 200;
+const MAX_LOG_ENTRIES = 500;
+
 export default function App() {
   const s = useAppState();
 
   function addLog(level, message, details = '') {
-    s.setLogs((cur) => [...cur, { id: `${Date.now()}-${Math.random()}`, time: messageTime(), level: String(level || 'info').toLowerCase(), message: String(message || ''), details: details ? String(details) : '' }]);
+    s.setLogs((cur) => [...cur.slice(-(MAX_LOG_ENTRIES - 1)), { id: `${Date.now()}-${Math.random()}`, time: messageTime(), level: String(level || 'info').toLowerCase(), message: String(message || ''), details: details ? String(details) : '' }]);
   }
   function addChat(role, text, source = '') {
     if (!String(text || '').trim()) return;
-    s.setChatMessages((cur) => [...cur, { id: `${Date.now()}-${Math.random()}`, role, text: String(text), source, time: messageTime() }]);
+    s.setChatMessages((cur) => [...cur.slice(-(MAX_CHAT_MESSAGES - 1)), { id: `${Date.now()}-${Math.random()}`, role, text: String(text), source, time: messageTime() }]);
   }
 
   React.useEffect(() => {
@@ -75,8 +78,8 @@ export default function App() {
     s.startingRef.current = true; s.setPhase('connecting'); addLog('info', 'درخواست ایجاد جلسه ارسال شد');
     let room;
     try {
-      const data = await createSession({});
-      const { Room, RoomEvent, Track } = await import('livekit-client');
+      const [data, livekit] = await Promise.all([createSession({}), import('livekit-client')]);
+      const { Room, RoomEvent, Track } = livekit;
       const provider = ['did', 'spatius', 'none'].includes(data.avatarProvider) ? data.avatarProvider : (s.health?.avatarEnabled ? 'spatius' : 'none');
       const spatiusAvatar = provider === 'spatius';
       room = new Room({ adaptiveStream: !spatiusAvatar, dynacast: true, singlePeerConnection: spatiusAvatar ? false : undefined });

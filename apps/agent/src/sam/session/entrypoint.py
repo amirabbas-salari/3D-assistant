@@ -26,7 +26,6 @@ import httpx
 import openai as openai_sdk
 from livekit import agents, rtc
 from livekit.agents import APIConnectOptions, AgentSession, RoomOutputOptions, SessionConnectOptions
-from livekit.agents import llm as lk_llm
 from livekit.agents import tts as tts_api
 from livekit.agents.types import DEFAULT_API_CONNECT_OPTIONS
 from livekit.plugins import openai as lk_openai
@@ -235,23 +234,6 @@ class RagPrefetcher:
         except Exception as e:
             self._log.warning("RAG preload failed: %s", e)
         return None
-
-
-class RagAssistant(PersianAssistant):
-    """RAG را قبل از فراخوانی LLM و فقط برای همین نوبت تزریق می‌کند (turn_ctx موقت است)."""
-
-    def __init__(self, *, knowledge_tool: Any, latency_tracker: Any, rag: RagPrefetcher):
-        super().__init__(knowledge_tool=knowledge_tool, latency_tracker=latency_tracker)
-        self._rag_prefetcher = rag
-
-    async def on_user_turn_completed(self, turn_ctx: lk_llm.ChatContext, new_message: lk_llm.ChatMessage) -> None:
-        await super().on_user_turn_completed(turn_ctx, new_message)
-        text = (new_message.text_content or "").strip()
-        if not text:
-            return
-        ctx_text = await self._rag_prefetcher.get(text)
-        if ctx_text:
-            turn_ctx.add_message(role="system", content=f"دانش مرتبط (از پایگاه شرکت):\n{ctx_text}")
 
 
 # ───────────────────────────── Persian TTS tokenizer ─────────────────────────────
@@ -736,7 +718,7 @@ async def entrypoint(ctx: agents.JobContext) -> None:
     tool_timings: dict[str, float] = {}
     knowledge_tool = _make_knowledge_tool(knowledge_index, knowledge_config, job_logger, tool_timings) if knowledge_index is not None else None
     rag = RagPrefetcher(knowledge_index, knowledge_config, job_logger, tool_timings, enabled=cfg.rag_preload, timeout=cfg.rag_timeout)
-    assistant = RagAssistant(knowledge_tool=knowledge_tool, latency_tracker=latency, rag=rag)
+    assistant = PersianAssistant(knowledge_tool=knowledge_tool, latency_tracker=latency, rag=rag)
 
     # ── publishers ──
     async def publish_latency_msg() -> None:
@@ -868,9 +850,6 @@ async def entrypoint(ctx: agents.JobContext) -> None:
         try:
             session.interrupt()
             kwargs: dict[str, Any] = {"user_input": text}
-            preload_ctx = await rag.get(text)   # در thread + timeout؛ event loop آزاد می‌ماند
-            if preload_ctx:
-                kwargs["instructions"] = f"دانش مرتبط از پایگاه شرکت (فقط از همین استفاده کن):\n{preload_ctx}"
             handle = session.generate_reply(**kwargs)
             await handle
             exc = _handle_exception(handle)

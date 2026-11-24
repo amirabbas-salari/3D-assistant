@@ -4,7 +4,7 @@ import { Activity, Copy, Trash2, CircleAlert } from 'lucide-react';
 export default function LogsPanel({ logs, setLogs, copyLogs, logRef }) {
   return (
     <section className="panel logs-panel">
-      <div className="panel-heading log-heading"><div><div className="log-icon"><Activity size={17} /></div><div><h2>گزارش نشست</h2><small>تمام رخدادهای مرورگر، API و Agent در این نشست · {logs.length} مورد</small></div></div><div className="log-actions"><button className="secondary-button compact" onClick={copyLogs}><Copy size={14} /> کپی گزارش</button><button className="secondary-button compact" onClick={() => setLogs([])}><Trash2 size={14} /> پاک‌کردن</button></div></div>
+      <div className="panel-heading log-heading"><div><div className="log-icon"><Activity size={17} /></div><div><h2>گزارش نشست</h2><small>رخدادهای اخیر مرورگر، API و Agent · {logs.length} مورد</small></div></div><div className="log-actions"><button className="secondary-button compact" onClick={copyLogs}><Copy size={14} /> کپی گزارش</button><button className="secondary-button compact" onClick={() => setLogs([])}><Trash2 size={14} /> پاک‌کردن</button></div></div>
       <div className="log-list" ref={logRef} role="log" aria-live="polite">
         {logs.length === 0 && <div className="empty-logs">هنوز رویدادی ثبت نشده است.</div>}
         {logs.map((entry) => (

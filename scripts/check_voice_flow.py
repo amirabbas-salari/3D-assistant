@@ -14,10 +14,10 @@ credentials: it exercises the tokenizer and the prompt, not the providers.
 from __future__ import annotations
 
 import asyncio
-import importlib.util
 import os
 import sys
 from pathlib import Path
+from types import SimpleNamespace
 
 ROOT = Path(__file__).resolve().parent.parent
 sys.path.insert(0, str(ROOT / "apps/agent/src"))
@@ -64,10 +64,10 @@ async def tts_requests(text: str) -> list[str]:
 
 
 def load_agent():
-    spec = importlib.util.spec_from_file_location("agent_under_test", ROOT / "agent.py")
-    module = importlib.util.module_from_spec(spec)
-    spec.loader.exec_module(module)
-    return module
+    from sam.assistant.agent import PersianAssistant
+    from sam.config.speed import speed_profile
+
+    return SimpleNamespace(PersianAssistant=PersianAssistant, speed_profile=speed_profile)
 
 
 async def main() -> int:
@@ -92,20 +92,16 @@ async def main() -> int:
     )
 
     agent_module = load_agent()
-
-    class _Tool:
-        info = type("Info", (), {"name": "search_knowledge", "description": "x"})()
-
-    instructions = str(agent_module.PersianAssistant(knowledge_tool=_Tool()).instructions)
-    check("prompt asks for a complete first sentence", "جمله‌ی کامل شروع کن" in instructions)
-    check("prompt forbids breaking sentences up", "جمله‌ها را نشکن" in instructions)
+    instructions = str(agent_module.PersianAssistant().instructions)
+    check("prompt asks for a complete first sentence", "هر جمله یه فکر کامل باشه" in instructions)
+    check("prompt forbids breaking sentences up", "نه تکه‌تکه" in instructions)
     check(
         "the old 'max six words' rule is gone",
         "حداکثر شش کلمه" not in instructions,
     )
     check(
         "first sentence has a length target, not just 'short'",
-        "پنج تا نه کلمه" in instructions,
+        "۵ تا ۹ کلمه" in instructions,
     )
 
     # The profile that matters most: "balanced" must already carry preemptive
@@ -118,7 +114,8 @@ async def main() -> int:
             print("WARN", a)
 
     os.environ.pop("AGENT_SPEED_PROFILE", None)
-    balanced = agent_module._speed_profile(_Log())
+    os.environ["AGENT_SPEED_PROFILE"] = "balanced"
+    balanced = agent_module.speed_profile(_Log())
     check(
         "balanced profile pre-generates TTS (next sentence ready before the gap)",
         balanced.get("preemptive_generation", {}).get("preemptive_tts") is True,

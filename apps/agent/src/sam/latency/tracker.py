@@ -31,6 +31,7 @@ from __future__ import annotations
 import logging
 import os
 import time
+from collections import deque
 from dataclasses import dataclass, field
 
 # Stage order matters: it is the order a turn happens in, and the order a
@@ -53,7 +54,8 @@ STAGES: tuple[tuple[str, str], ...] = (
     ("tts_requests", "تعداد درخواست TTS در این نوبت"),
 )
 
-STAGE_LABELS = dict(STAGES)
+STAGE_LABELS: dict[str, str] = dict(STAGES)
+MAX_RETAINED_SAMPLES = 100
 
 # What actually moves each stage. A bottleneck line that names a setting is
 # actionable; one that only names a duration is trivia.
@@ -166,7 +168,7 @@ class LatencyTracker:
         self._log = job_logger
         self.enabled = _env_flag("LATENCY_LOG", True) if enabled is None else enabled
         self.report_interval = _env_int("LATENCY_REPORT_INTERVAL", 5)
-        self._samples: list[TurnSample] = []
+        self._samples: deque[TurnSample] = deque(maxlen=MAX_RETAINED_SAMPLES)
         self._turn = 0
         self._pending_user: dict[str, float | None] | None = None
         # Per-token tracking (مرحله‌ای) — LLM و TTS هر دو در یک ردیف با سگمنت‌های مرحله‌ای
@@ -183,7 +185,7 @@ class LatencyTracker:
 
     # ---- Token-level tracking (برای گانت مرحله‌ای) ----
     def on_llm_start(self) -> None:
-        self._llm_start_ts = time.time()
+        self._llm_start_ts = time.perf_counter()
         self._llm_last_ts = self._llm_start_ts
         self._llm_tokens = []
         if self._turn_start_ts is None:
@@ -192,7 +194,7 @@ class LatencyTracker:
     def on_llm_token(self, text: str) -> None:
         if not text:
             return
-        now = time.time()
+        now = time.perf_counter()
         if self._llm_start_ts is None:
             self.on_llm_start()
             self._llm_start_ts = now
@@ -215,7 +217,7 @@ class LatencyTracker:
         pass
 
     def on_tts_start(self, text: str) -> None:
-        now = time.time()
+        now = time.perf_counter()
         # همیشه نسبت به turn_start بسنج — محور گانت 0 = پایان گفتار نیست، بلکه turn_start است؛
         # برای سازگاری با حالت pipeline (0=پایان گفتار) در فرانت‌ند تبدیل انجام می‌شود
         # باگ قبلی: base = _llm_start_ts باعث می‌شد TTS روی 0.8s نمایش داده شود در حالی که LLM روی 1.0s بود (قبل از LLM!)
@@ -227,7 +229,7 @@ class LatencyTracker:
     def on_tts_end(self, text: str | None = None) -> None:
         if not self._tts_pending:
             return
-        now = time.time()
+        now = time.perf_counter()
         base = self._tts_pending.get("base")
         if base is None:
             base = self._turn_start_ts or self._llm_start_ts or now
@@ -245,7 +247,7 @@ class LatencyTracker:
         self._tts_pending = None
 
     def on_turn_start(self) -> None:
-        self._turn_start_ts = time.time()
+        self._turn_start_ts = time.perf_counter()
         self._stt_last_ts = self._turn_start_ts
         self._stt_tokens = []
         self._stt_last_text = ""
@@ -254,7 +256,7 @@ class LatencyTracker:
         """هر تکه STT interim/final را به عنوان سگمنت ثبت کن (مرحله‌ای)."""
         if not text or not text.strip():
             return
-        now = time.time()
+        now = time.perf_counter()
         if self._turn_start_ts is None:
             self._turn_start_ts = now
             self._stt_last_ts = now
@@ -423,7 +425,7 @@ class LatencyTracker:
                     stages.get("end_of_turn_delay"),
                     stages.get("llm_node_ttft"),
                     stages.get("tts_node_ttfb"),
-                ) if value
+                ) if value is not None
             )
             self._log.info(
                 "⏱ نوبت #%d سهم‌ها: پایان‌نوبت+LLM+TTS = %s از %s سراسری → %s جای دیگر",
@@ -435,7 +437,10 @@ class LatencyTracker:
         """Mean milliseconds per stage across every recorded turn."""
         result: dict[str, float] = {}
         for key, _label in STAGES:
-            values = [s.stages[key] for s in self._samples if s.stages.get(key)]
+            values = [
+                value for sample in self._samples
+                if (value := sample.stages.get(key)) is not None
+            ]
             if values:
                 result[key] = sum(values) / len(values)
         return result
@@ -449,7 +454,7 @@ class LatencyTracker:
             return text
 
         averages = self.averages()
-        if not averages and not any(s.e2e_ms for s in self._samples):
+        if not averages and not any(s.e2e_ms is not None for s in self._samples):
             text = (
                 f"{prefix} ({len(self._samples)} نوبت): هیچ زمانی از SDK گزارش نشد؛ "
                 "شاید نوبتی کامل نشده یا مدل‌ها metrics برنگردانده‌اند."
@@ -460,13 +465,16 @@ class LatencyTracker:
 
         lines = [f"{prefix} ({len(self._samples)} نوبت):"]
         for key, label in STAGES:
-            values = [s.stages[key] for s in self._samples if s.stages.get(key)]
+            values = [
+                value for sample in self._samples
+                if (value := sample.stages.get(key)) is not None
+            ]
             if not values:
                 continue
             lines.append(
                 f"  • {label}: میانگین {fmt_ms(sum(values) / len(values))} · بدترین {fmt_ms(max(values))}"
             )
-        e2e = [s.e2e_ms for s in self._samples if s.e2e_ms]
+        e2e = [s.e2e_ms for s in self._samples if s.e2e_ms is not None]
         if e2e:
             ordered = sorted(e2e)
             p50 = ordered[len(ordered) // 2]
@@ -503,16 +511,18 @@ class LatencyTracker:
     def as_dict(self) -> dict[str, object]:
         """Machine-readable snapshot, published to the browser panel."""
         # Expose response_delay explicitly for the UI highlight (equals e2e when SDK provides it)
-        last_e2e = self._samples[-1].e2e_ms if self._samples else None
+        averages = self.averages()
         last_resp = self._samples[-1].stages.get("response_delay") if self._samples else None
         last_tokens = getattr(self._samples[-1], "tokens", []) if self._samples else []
         last_tts = getattr(self._samples[-1], "tts_tokens", []) if self._samples else []
         last_stt = getattr(self._samples[-1], "stt_tokens", []) if self._samples else []
         return {
             "turns": self._turn,
-            "averages": {key: round(value, 1) for key, value in self.averages().items()},
+            "averages": {key: round(value, 1) for key, value in averages.items()},
             "response_delay_ms": None if last_resp is None else round(last_resp),
-            "response_delay_avg_ms": round(self.averages().get("response_delay", 0), 1) if self.averages().get("response_delay") else None,
+            "response_delay_avg_ms": (
+                round(averages["response_delay"], 1) if "response_delay" in averages else None
+            ),
             "last": (
                 {
                     "index": self._samples[-1].index,
@@ -548,10 +558,10 @@ class LatencyTracker:
     def mark_turn_start(self) -> None:
         # اگر همین الان STT در حال جمع‌آوری است، پاک نکن (گانت خالی می‌شود)
         if self._stt_tokens:
-            # فقط اگر بیش از 30 ثانیه از شروع گذشته، نوبت جدید حساب کن
-            if self._turn_start_ts is not None and (time.time() - self._turn_start_ts) < 60:
+            # فقط اگر بیش از 60 ثانیه از شروع گذشته، نوبت جدید حساب کن
+            if self._turn_start_ts is not None and (time.perf_counter() - self._turn_start_ts) < 60:
                 return
-        self._turn_start_ts = time.time()
+        self._turn_start_ts = time.perf_counter()
         self._stt_last_ts = self._turn_start_ts
         self._stt_tokens = []
         self._stt_last_text = ""
