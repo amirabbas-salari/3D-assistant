@@ -145,17 +145,31 @@ export default function App() {
         const isWorker = u.hostname.includes('workers.dev');
         addLog('info', 'اتصال LiveKit', `url=${u.protocol}//${u.host}${u.pathname} worker=${isWorker ? 'yes' : 'direct'} sdk=${Room.version || 'unknown'} binaryType=arraybuffer`);
       } catch {}
+      const directFallbackUrl = 'wss://horno-avatar-jr68tfeq.livekit.cloud';
+      const isWorkerUrl = (() => { try { return new URL(data.serverUrl).hostname.includes('workers.dev'); } catch { return false; } })();
       try {
         await room.connect(data.serverUrl, data.token);
       } catch (connectErr) {
         const msg = connectErr instanceof Error ? connectErr.message : String(connectErr);
         const stack = connectErr instanceof Error ? (connectErr.stack || '') : '';
         const isBlobJson = msg.includes('[object Blob]') || msg.includes('Unexpected token');
-        const hint = isBlobJson
-          ? 'Blob→[object Blob] JSON: Worker did not preserve binary or binaryType≠arraybuffer. Test direct URL wss://horno-avatar-jr68tfeq.livekit.cloud ; if direct works redeploy Worker.'
-          : `code=${connectErr?.code || '?'} status=${connectErr?.status || '?'}`;
-        addLog('error', 'سیگنال LiveKit: اتصال ناموفق', `msg=${msg.slice(0, 400)} · ${hint} · stack=${stack.slice(0, 800)}`);
-        throw connectErr;
+        if (isBlobJson && isWorkerUrl) {
+          addLog('warning', 'سیگنال Worker ناموفق — تلاش مستقیم', `worker=${data.serverUrl} → fallback=${directFallbackUrl} · msg=${msg.slice(0, 200)}`);
+          try {
+            await room.connect(directFallbackUrl, data.token);
+            addLog('success', 'اتصال مستقیم LiveKit موفق شد', `fallback=${directFallbackUrl} · Worker باید redeploy شود`);
+          } catch (fallbackErr) {
+            const m2 = fallbackErr instanceof Error ? fallbackErr.message : String(fallbackErr);
+            addLog('error', 'سیگنال LiveKit: اتصال ناموفق (مستقیم هم شکست)', `msg=${m2.slice(0, 400)} · stack=${(fallbackErr instanceof Error ? fallbackErr.stack : '').slice(0, 800)}`);
+            throw fallbackErr;
+          }
+        } else {
+          const hint = isBlobJson
+            ? 'Blob→[object Blob] JSON: Worker binaryType≠arraybuffer یا Worker redeploy لازم'
+            : `code=${connectErr?.code || '?'} status=${connectErr?.status || '?'}`;
+          addLog('error', 'سیگنال LiveKit: اتصال ناموفق', `msg=${msg.slice(0, 400)} · ${hint} · stack=${stack.slice(0, 800)}`);
+          throw connectErr;
+        }
       }
       s.startingRef.current = false; s.setPhase('connected');
       addLog('success', 'به اتاق LiveKit متصل شدیم', `room=${data.roomName || 'unknown'} · agent=${s.health?.agentName || 'configured agent'}`);
