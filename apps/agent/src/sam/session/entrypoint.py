@@ -63,13 +63,14 @@ async def entrypoint(ctx: agents.JobContext) -> None:
     livekit_tts_model = os.getenv("LIVEKIT_TTS_MODEL", "google/gemini-3.8-flash-lite-tts").strip()
     livekit_tts_voice = os.getenv("LIVEKIT_TTS_VOICE", "Charon").strip() or "Charon"
     tts_language = os.getenv("LIVEKIT_TTS_LANGUAGE", "fa").strip() or "fa"
-    # Effective TTS model/voice for logs — cloudflare uses its own vars, elevenlabs مستقیم از elevenlabs.io
-    cf_tts_model = os.getenv("CLOUDFLARE_TTS_MODEL", "elevenlabs/eleven-v3").strip() or "elevenlabs/eleven-v3"
-    cf_tts_voice = (
-        os.getenv("CLOUDFLARE_TTS_VOICE_ID", "").strip()
+    # Effective TTS model/voice for logs — openrouter uses its own vars, elevenlabs مستقیم از elevenlabs.io
+    or_tts_model = os.getenv("OPENROUTER_TTS_MODEL", "elevenlabs/eleven-v3-conversational").strip() or "elevenlabs/eleven-v3-conversational"
+    or_tts_voice = (
+        os.getenv("OPENROUTER_TTS_VOICE", "").strip()
+        or os.getenv("OPENROUTER_VOICE", "").strip()
         or os.getenv("ELEVENLABS_VOICE_ID", "").strip()
         or livekit_tts_voice
-    ) or "JBFqnCBsd6RMkjVDRZzb"
+    ) or "george"
     eleven_tts_model = (
         os.getenv("ELEVENLABS_MODEL", "").strip()
         or os.getenv("ELEVENLABS_TTS_MODEL", "").strip()
@@ -119,25 +120,25 @@ async def entrypoint(ctx: agents.JobContext) -> None:
         except Exception as e:
             job_logger.warning("StreamAdapter فعال‌سازی نشد: %s", e)
 
-    # Fallback for Cloudflare 402 (insufficient credits) → LiveKit Inference
-    # Set CLOUDFLARE_TTS_FALLBACK=false to disable
-    if tts_prov == "cloudflare" and os.getenv("CLOUDFLARE_TTS_FALLBACK", "true").strip().lower() not in {"0", "false", "no", "off", ""}:
+    # Fallback for OpenRouter 402/429 (insufficient credits/rate limit) → LiveKit Inference
+    # Set OPENROUTER_TTS_FALLBACK=false to disable
+    if tts_prov == "openrouter" and os.getenv("OPENROUTER_TTS_FALLBACK", "true").strip().lower() not in {"0", "false", "no", "off", ""}:
         try:
             from livekit.agents.tts import FallbackAdapter
 
             fallback_tts = build_tts("inference", model=livekit_tts_model, voice=livekit_tts_voice, language=tts_language, conn_options=inference_conn_options, job_logger=job_logger)
-            job_logger.info("Cloudflare TTS fallback enabled: primary=cloudflare/%s → fallback=inference/%s", cf_tts_model, livekit_tts_model)
+            job_logger.info("OpenRouter TTS fallback enabled: primary=openrouter/%s → fallback=inference/%s", or_tts_model, livekit_tts_model)
             # FallbackAdapter will try primary, then fallback on failure (e.g. 402)
             tts = FallbackAdapter([tts, fallback_tts])  # type: ignore
         except Exception as e:
-            job_logger.warning("Could not enable Cloudflare TTS fallback: %s (continuing without fallback)", e)
+            job_logger.warning("Could not enable OpenRouter TTS fallback: %s (continuing without fallback)", e)
 
     # Human-readable labels and effective model/voice for logs
     def _label(p: str) -> str:
-        return {"cloudflare": "Cloudflare", "elevenlabs": "ElevenLabs", "direct": "Direct", "inference": "Inference"}.get(p, p)
+        return {"openrouter": "OpenRouter", "elevenlabs": "ElevenLabs", "direct": "Direct", "inference": "Inference"}.get(p, p)
 
-    if tts_prov == "cloudflare":
-        eff_tts_model, eff_tts_voice = cf_tts_model, cf_tts_voice
+    if tts_prov == "openrouter":
+        eff_tts_model, eff_tts_voice = or_tts_model, or_tts_voice
     elif tts_prov == "elevenlabs":
         eff_tts_model, eff_tts_voice = eleven_tts_model, eleven_tts_voice
     else:
@@ -268,8 +269,8 @@ async def entrypoint(ctx: agents.JobContext) -> None:
 
     turn_handling = speed_profile(job_logger)
     # Use effective model for streaming log
-    if tts_prov == "cloudflare":
-        streaming_desc = "Cloudflare eleven-v3 (via StreamAdapter)"
+    if tts_prov == "openrouter":
+        streaming_desc = f"OpenRouter {or_tts_model} (via StreamAdapter, mp3)"
     elif tts_prov == "elevenlabs":
         streaming_desc = f"ElevenLabs {eleven_tts_model} (native streaming)"
     else:
@@ -279,7 +280,7 @@ async def entrypoint(ctx: agents.JobContext) -> None:
         streaming_desc,
         json.dumps(turn_handling, ensure_ascii=False) if turn_handling else "SDK defaults", fast_start_enabled)
 
-    extra_body = llm_request_body(llm_max_tokens, job_logger)
+    extra_body = llm_request_body(llm_max_tokens, job_logger, model=llm_model)
 
     # هشدار مدل کند: gpt-oss برای voice مناسب نیست (TTFT 1-5s)
     if "gpt-oss" in llm_model.lower():
@@ -303,13 +304,24 @@ async def entrypoint(ctx: agents.JobContext) -> None:
         **({"turn_handling": turn_handling} if turn_handling else {}),
     )
 
-    # Prewarm TTS: اتصال وب‌سوکت را قبل از اولین نوبت باز کن (TTFB کمتر)
-    if hasattr(tts, "prewarm"):
+    # Prewarm TTS: اتصال وب‌سوکت را قبل از اولین نوبت باز کن (TTFB کمتر ~110ms)
+    # TrackedTTS مانع دیدن prewarm روی inner است — هر دو را چک کن
+    _prewarm_targets = [tts]
+    for attr in ("_inner", "tts", "_tts"):
         try:
-            tts.prewarm()  # type: ignore[attr-defined]
-            job_logger.info("TTS prewarm فراخوانی شد")
-        except Exception as e:
-            job_logger.warning("TTS prewarm شکست: %s", e)
+            inner = getattr(tts, attr, None)
+            if inner is not None and inner not in _prewarm_targets:
+                _prewarm_targets.append(inner)
+        except Exception:
+            pass
+    for tgt in _prewarm_targets:
+        if hasattr(tgt, "prewarm"):
+            try:
+                tgt.prewarm()  # type: ignore[attr-defined]
+                job_logger.info("TTS prewarm فراخوانی شد (%s)", type(tgt).__name__)
+                break
+            except Exception as e:
+                job_logger.warning("TTS prewarm شکست: %s", e)
 
     av_provider = avatar_provider()
     if av_provider == "none":
@@ -363,8 +375,11 @@ async def entrypoint(ctx: agents.JobContext) -> None:
                 job_logger.warning("LiveKit Inference 429 on %s (attempt %d, retrying)", event.source, rate_limit_hits["count"])
             return
         if status == 402:
-            # Cloudflare unified billing for provider models (elevenlabs)
-            job_logger.error("Cloudflare TTS 402: %s — unified billing credits exhausted. Add credits at AI Gateway dashboard or set TTS_PROVIDER=inference to fallback. (CLOUDFLARE_TTS_FALLBACK=true enables auto fallback)", error)
+            # OpenRouter / Inference 402: credits exhausted
+            if tts_prov == "openrouter":
+                job_logger.error("OpenRouter TTS 402: %s — credits exhausted. Add credits at https://openrouter.ai/settings/credits or set TTS_PROVIDER=inference to fallback. (OPENROUTER_TTS_FALLBACK=true enables auto fallback)", error)
+            else:
+                job_logger.error("TTS 402: %s — credits exhausted. Set TTS_PROVIDER=inference to fallback.", error)
             return
         job_logger.error("AgentSession %s error: %s", event.source, error)
 
@@ -373,7 +388,12 @@ async def entrypoint(ctx: agents.JobContext) -> None:
     async def publish_assistant_reply_msg(text: str) -> None:
         await publish_room_message(ctx, {"type":"assistant_reply","text":text})
 
-    knowledge_index, knowledge_config = _load_knowledge(job_logger)
+    # RAG load: ممکن است 200-500ms طول بکشد (Chroma + BM25) — به thread offload کن تا event loop بلوکه نشود
+    try:
+        knowledge_index, knowledge_config = await asyncio.to_thread(_load_knowledge, job_logger)
+    except Exception as e:
+        job_logger.warning("RAG load از thread شکست (%s) — fallback مستقیم", e)
+        knowledge_index, knowledge_config = _load_knowledge(job_logger)
     tool_timings: dict[str,float] = {}
     knowledge_tool = _make_knowledge_tool(knowledge_index, knowledge_config, job_logger, tool_timings) if knowledge_index is not None else None
     # نگه‌داشتن پیام preload برای پاکسازی بعد از هر نوبت (جلوگیری از رشد بی‌نهایت context)
@@ -433,6 +453,37 @@ async def entrypoint(ctx: agents.JobContext) -> None:
             latency.record_turn(getattr(item,"metrics",None), reply_text=text, interrupted=bool(getattr(item,"interrupted",False)), stt_model=stt_model, llm_model=llm_model, tts_model=tts_model, tool_ms=dict(tool_timings))
             tool_timings.clear()
             tts_requests["turn"]=0
+            # تاریخچه را محدود کن — هر نوبت ۲ پیام اضافه می‌کند، بعد از ۸ نوبت LLM کند می‌شود
+            try:
+                max_keep = int(os.getenv("AGENT_MAX_HISTORY_ITEMS", "12").strip() or "12")
+                if max_keep > 0 and hasattr(session, "chat_ctx") and session.chat_ctx is not None:
+                    items = getattr(session.chat_ctx, "items", None) or getattr(session.chat_ctx, "messages", None)
+                    if items is not None:
+                        try:
+                            cur_len = len(items)  # type: ignore
+                        except Exception:
+                            cur_len = 0
+                        if cur_len and cur_len > max_keep:
+                            excess = cur_len - max_keep
+                            for _ in range(excess):
+                                try:
+                                    oldest = items[0]  # type: ignore
+                                    # پیام‌های RAG موقت را نگه دار — جداگانه پاک می‌شود
+                                    if oldest is _rag_preload_msg[0]:
+                                        # این را نپران، بعدی را امتحان کن
+                                        if len(items) > 1:
+                                            oldest = items[1]  # type: ignore
+                                        else:
+                                            break
+                                    if hasattr(session.chat_ctx, "remove"):
+                                        session.chat_ctx.remove(oldest)  # type: ignore
+                                    else:
+                                        break
+                                except Exception:
+                                    break
+                            job_logger.info("chat history trimmed %s → %s items (max %s)", cur_len, max_keep, max_keep)
+            except Exception:
+                pass
             asyncio.create_task(publish_latency_msg())
             if text:
                 asyncio.create_task(publish_assistant_reply_msg(text))

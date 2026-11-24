@@ -20,24 +20,23 @@ def build_stt(provider: str, *, model: str, language: str, conn_options: APIConn
     return inference.STT(model=model, language=language, conn_options=conn_options, **({"fallback":fallback} if fallback else {}))
 
 def build_tts(provider: str, *, model: str, voice: str, language: str, conn_options: APIConnectOptions, job_logger):
-    if provider == "cloudflare":
-        # New: Cloudflare Workers AI → elevenlabs/eleven-v3
-        from .cloudflare_tts import CloudflareTTS
+    if provider == "openrouter":
+        from .openrouter_tts import OpenRouterTTS
 
-        cf_model = os.getenv("CLOUDFLARE_TTS_MODEL", model).strip() or model
-        # voice_id can be explicit or fallback to LIVEKIT_TTS_VOICE
-        cf_voice_id = (
-            os.getenv("CLOUDFLARE_TTS_VOICE_ID", "").strip()
-            or os.getenv("ELEVENLABS_VOICE_ID", "").strip()
+        or_model = os.getenv("OPENROUTER_TTS_MODEL", "elevenlabs/eleven-v3-conversational").strip() or "elevenlabs/eleven-v3-conversational"
+        or_voice = (
+            os.getenv("OPENROUTER_TTS_VOICE", "").strip()
+            or os.getenv("OPENROUTER_VOICE", "").strip()
             or voice
         )
-        # sample_rate: prefer CLOUDFLARE_TTS_SAMPLE_RATE else 24000
+        or_format = os.getenv("OPENROUTER_TTS_RESPONSE_FORMAT", "mp3").strip() or "mp3"
         try:
-            sr = int(os.getenv("CLOUDFLARE_TTS_SAMPLE_RATE", "24000").strip() or "24000")
+            sr = int(os.getenv("OPENROUTER_TTS_SAMPLE_RATE", "24000").strip() or "24000")
         except ValueError:
             sr = 24000
-        job_logger.info("TTS via Cloudflare Workers AI (model=%s, voice_id=%s, lang=%s, sr=%s)", cf_model, cf_voice_id, language, sr)
-        return CloudflareTTS(model=cf_model, voice_id=cf_voice_id, sample_rate=sr)
+        base_url = os.getenv("OPENROUTER_BASE_URL", "https://openrouter.ai/api/v1").strip() or "https://openrouter.ai/api/v1"
+        job_logger.info("TTS via OpenRouter (model=%s, voice=%s, format=%s, sr=%s, base=%s)", or_model, or_voice or "default", or_format, sr, base_url)
+        return OpenRouterTTS(model=or_model, voice=or_voice, response_format=or_format, sample_rate=sr, base_url=base_url)
 
     if provider == "elevenlabs":
         # مستقیم از elevenlabs.io — مدل درخواستی eleven_flash_v2_5
