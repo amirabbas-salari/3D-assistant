@@ -24,10 +24,10 @@ def _load_knowledge(job_logger: logging.Logger):
         job_logger.warning("RAG: chromadb not installed. pip install chromadb && python scripts/build_rag_index.py")
         return None, None
     except FileNotFoundError as exc:
-        job_logger.warning("RAG: %s", exc)
+        job_logger.warning("RAG: %s — RAG بدون ایندکس ادامه می‌دهد (ساخت: python scripts/build_rag_index.py)", exc)
         return None, None
     except Exception as exc:
-        job_logger.warning("RAG: could not load index (%s: %s)", type(exc).__name__, exc)
+        job_logger.warning("RAG: could not load index (%s: %s) — بدون RAG ادامه می‌دهم", type(exc).__name__, exc)
         return None, None
     job_logger.info("%s · %s chunks", rag_module.describe_config(config), len(index))
     return index, config
