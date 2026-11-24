@@ -138,8 +138,16 @@ def llm_request_body(max_tokens: int, job_logger: logging.Logger | None = None, 
             job_logger.info("LLM speed: provider=cloudflare model=%s reasoning_effort=%s, max_tokens=%s", model or "?", effort or "provider default", max_tokens)
         return fields
     else:  # openrouter
-        # OpenRouter is OpenAI-compatible; reasoning is model-specific and usually auto-handled
-        # We don't send reasoning_effort for generic OpenRouter models unless user explicitly sets OPENROUTER_REASONING_EFFORT
+        # Reasoning models (qwen3, deepseek-r1, qwq, o1/o3) output Thinking Process by default → for voice we want it hidden
+        # OpenRouter supports reasoning.exclude to strip it at the gateway (faster + no leak)
+        reasoning_models = ("qwen3", "deepseek-r1", "qwq", "o1", "o3", "reasoning", "thinking", "r1-distill")
+        is_reasoning = any(k in model.lower() for k in reasoning_models) if model else False
+        if is_reasoning and os.getenv("OPENROUTER_INCLUDE_REASONING", "").strip().lower() not in {"1", "true", "yes", "on"}:
+            # Hide reasoning — fixes the "Thinking Process:" leak seen in logs with qwen/qwen3.5-flash
+            fields["reasoning"] = {"exclude": True}
+            if job_logger:
+                job_logger.info("LLM speed: provider=openrouter model=%s reasoning=excluded (voice, hidden), max_tokens=%s", model or "?", max_tokens)
+            return fields
         raw = os.getenv("OPENROUTER_REASONING_EFFORT", "").strip().lower() or os.getenv("OPENROUTER_LLM_REASONING_EFFORT", "").strip().lower()
         effort = "" if raw in {"", "default", "unset", "none"} else raw
         if effort in {"low", "medium", "high"}:
