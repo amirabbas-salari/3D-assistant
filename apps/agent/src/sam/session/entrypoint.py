@@ -519,11 +519,14 @@ async def entrypoint(ctx: agents.JobContext) -> None:
     if latency.enabled:
         job_logger.info("Latency instrumentation on: summary every %s turns", latency.report_interval or "∞")
 
-    # ── LLM config (OpenRouter/Cloudflare) ──
+    # ── LLM config (LiveKit/OpenRouter/Cloudflare) ──
     try:
         llm_prov, llm_model, llm_base_url = validate_llm_config(job_logger)
     except RuntimeError as exc:
-        raise RuntimeError(str(exc) + " — برای OpenRouter: OPENROUTER_API_KEY را از https://openrouter.ai/settings/keys بگیرید و در .env بگذارید.") from exc
+        hint = " — برای LiveKit: LLM_PROVIDER=livekit (نیازی به کلید اضافی نیست، فقط LIVEKIT_* کافیست)."
+        if "openrouter" in str(exc).lower():
+            hint = " — برای OpenRouter: OPENROUTER_API_KEY را از https://openrouter.ai/settings/keys بگیرید و در .env بگذارید."
+        raise RuntimeError(str(exc) + hint) from exc
     llm_api_key = resolve_llm_api_key()
     llm_max_tokens = resolve_llm_max_tokens()
     if not 1 <= llm_max_tokens <= 24000:
@@ -585,6 +588,20 @@ async def entrypoint(ctx: agents.JobContext) -> None:
             return _build_stt_sync(), _build_tts_sync(), None
 
     def _make_llm_legacy():
+        # LiveKit Inference — no API key/base_url needed, goes via LiveKit gateway
+        if llm_prov == "livekit":
+            from livekit.agents import inference as lk_inference
+            job_logger.info("LLM via LiveKit Inference (model=%s, no extra API key)", llm_model)
+            # extra_kwargs carries max_tokens; LiveKit gateway forwards it
+            extra = dict(extra_body) if extra_body else {}
+            # LiveKit inference expects max_tokens via extra_kwargs if provided
+            if "max_tokens" not in extra:
+                extra["max_tokens"] = llm_max_tokens
+            try:
+                return lk_inference.LLM(model=llm_model, extra_kwargs=extra if extra else None)
+            except TypeError:
+                # fallback for older SDK without extra_kwargs
+                return lk_inference.LLM(model=llm_model)
         kwargs = dict(model=llm_model, api_key=llm_api_key, base_url=llm_base_url, extra_body=extra_body)
         if llm_headers:
             for hk in ("extra_headers", "default_headers", "headers"):
@@ -596,6 +613,9 @@ async def entrypoint(ctx: agents.JobContext) -> None:
 
     def _make_llm_sync():
         """کلاینت اختصاصی: max_retries=0 (retry را LiveKit مدیریت می‌کند)، pool گرم، timeout مشخص."""
+        if llm_prov == "livekit":
+            # LiveKit Inference needs no custom httpx client — it uses LiveKit gateway
+            return _make_llm_legacy(), None
         try:
             http_client = httpx.AsyncClient(
                 timeout=httpx.Timeout(connect=10.0, read=cfg.llm_read_timeout, write=5.0, pool=5.0),

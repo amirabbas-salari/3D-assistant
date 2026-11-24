@@ -1,18 +1,21 @@
-"""LLM provider abstraction — Cloudflare Workers AI ↔ OpenRouter.
+"""LLM provider abstraction — LiveKit Inference ↔ OpenRouter ↔ Cloudflare.
 
+- LLM_PROVIDER=livekit/inference → uses LiveKit Inference gateway (no extra API key, uses LIVEKIT_*)
 - LLM_PROVIDER=openrouter → uses OpenRouter (https://openrouter.ai/api/v1)
 - LLM_PROVIDER=cloudflare → uses Cloudflare Workers AI
-- Auto-detect: if OPENROUTER_API_KEY is set → openrouter, else cloudflare if CLOUDFLARE_* set
+- Auto-detect: livekit (if nothing else configured) → openrouter → cloudflare
 - Supports both CLOUDFLARE_LLM_* and generic LLM_* / OPENROUTER_LLM_* env vars for smooth migration
 
 تغییرات: routing ارائه‌دهندهٔ OpenRouter بر اساس تأخیر، تشخیص دقیق مدل‌های reasoning (قبلاً زیررشتهٔ
 "o1"/"o3" روی نام‌های نامرتبط هم می‌خورد)، و خاموش‌کردن واقعی thinking در Qwen.
+نسخه جدید: پشتیبانی از LiveKit Inference برای LLM (بدون کلید اضافی).
 """
 import os
 import re
 import logging
 
 # Defaults
+DEFAULT_LIVEKIT_MODEL = "openai/gpt-4o-mini"  # via LiveKit Inference — no extra API key, fast & cheap
 DEFAULT_CLOUDFLARE_MODEL = "@cf/meta/llama-3.3-70b-instruct-fp8-fast"
 DEFAULT_OPENROUTER_MODEL = "openai/gpt-4o-mini"  # fast, cheap, good Persian + tool-calling; alternatives: meta-llama/llama-3.3-70b-instruct, google/gemini-2.0-flash-001
 DEFAULT_MAX_TOKENS = 120  # برای ۲ جمله + سوال؛ فارسی ~1.3× توکن‌خور است — 90 خیلی کم و جواب‌ها بریده می‌شد؛ 120 تعادل سرعت/کامل بودن
@@ -30,6 +33,8 @@ def looks_like_reasoning_model(model: str) -> bool:
 def llm_provider() -> str:
     """Which LLM gateway to use."""
     raw = os.getenv("LLM_PROVIDER", "").strip().lower()
+    if raw in {"livekit", "inference", "lk", "livekit-inference", "livekit_inference"}:
+        return "livekit"
     if raw in {"openrouter", "or", "open_router", "open-router"}:
         return "openrouter"
     if raw in {"cloudflare", "cf", "workers", "workers-ai", "workers_ai"}:
@@ -42,13 +47,13 @@ def llm_provider() -> str:
         return "openrouter"
     if os.getenv("CLOUDFLARE_API_TOKEN", "").strip() and os.getenv("CLOUDFLARE_ACCOUNT_ID", "").strip():
         return "cloudflare"
-    # default: openrouter if nothing configured (will error with helpful message later)
-    return "openrouter"
+    # default: livekit if nothing configured — uses existing LIVEKIT_* credentials, no extra key
+    return "livekit"
 
 
 def llm_max_tokens() -> int:
     """Unified max_tokens with fallbacks for migration."""
-    for key in ("LLM_MAX_TOKENS", "OPENROUTER_LLM_MAX_TOKENS", "CLOUDFLARE_LLM_MAX_TOKENS"):
+    for key in ("LLM_MAX_TOKENS", "OPENROUTER_LLM_MAX_TOKENS", "CLOUDFLARE_LLM_MAX_TOKENS", "LIVEKIT_LLM_MAX_TOKENS"):
         val = os.getenv(key, "").strip()
         if val:
             try:
@@ -63,8 +68,21 @@ def llm_max_tokens() -> int:
 def llm_model() -> str:
     """Resolve model name for current provider."""
     prov = llm_provider()
+    if prov == "livekit":
+        for key in ("LIVEKIT_LLM_MODEL", "LLM_MODEL", "OPENROUTER_LLM_MODEL", "CLOUDFLARE_LLM_MODEL"):
+            val = os.getenv(key, "").strip()
+            if val:
+                if val.startswith("@cf/"):
+                    mapping = {
+                        "@cf/meta/llama-3.3-70b-instruct-fp8-fast": "openai/gpt-4o-mini",
+                        "@cf/meta/llama-3.1-8b-instruct": "openai/gpt-4o-mini",
+                        "@cf/openai/gpt-oss-120b": "openai/gpt-oss-120b",
+                    }
+                    return mapping.get(val, DEFAULT_LIVEKIT_MODEL)
+                return val
+        return DEFAULT_LIVEKIT_MODEL
     if prov == "openrouter":
-        for key in ("OPENROUTER_LLM_MODEL", "LLM_MODEL", "CLOUDFLARE_LLM_MODEL"):
+        for key in ("OPENROUTER_LLM_MODEL", "LLM_MODEL", "CLOUDFLARE_LLM_MODEL", "LIVEKIT_LLM_MODEL"):
             val = os.getenv(key, "").strip()
             if val:
                 # translate old Cloudflare @cf/... to OpenRouter equivalent if user didn't update model yet
@@ -79,7 +97,7 @@ def llm_model() -> str:
                 return val
         return DEFAULT_OPENROUTER_MODEL
     else:  # cloudflare
-        for key in ("CLOUDFLARE_LLM_MODEL", "LLM_MODEL", "OPENROUTER_LLM_MODEL"):
+        for key in ("CLOUDFLARE_LLM_MODEL", "LLM_MODEL", "OPENROUTER_LLM_MODEL", "LIVEKIT_LLM_MODEL"):
             val = os.getenv(key, "").strip()
             if val:
                 return val
@@ -88,6 +106,8 @@ def llm_model() -> str:
 
 def llm_api_key() -> str:
     prov = llm_provider()
+    if prov == "livekit":
+        return ""  # LiveKit Inference uses LIVEKIT_API_KEY/SECRET via gateway, no separate LLM key
     if prov == "openrouter":
         return os.getenv("OPENROUTER_API_KEY", "").strip()
     return os.getenv("CLOUDFLARE_API_TOKEN", "").strip()
@@ -95,6 +115,8 @@ def llm_api_key() -> str:
 
 def llm_base_url() -> str:
     prov = llm_provider()
+    if prov == "livekit":
+        return "livekit-inference"  # symbolic — inference.LLM uses LiveKit gateway, not HTTP base_url
     if prov == "openrouter":
         return (os.getenv("OPENROUTER_BASE_URL", "").strip() or os.getenv("OPENROUTER_API_BASE", "").strip() or "https://openrouter.ai/api/v1")
     # cloudflare
@@ -198,6 +220,12 @@ def _openrouter_fields(max_tokens: int, job_logger: logging.Logger | None, model
 def llm_request_body(max_tokens: int, job_logger: logging.Logger | None = None, *, model: str = "") -> dict:
     fields: dict = {"max_tokens": max_tokens}
     prov = llm_provider()
+    if prov == "livekit":
+        # LiveKit Inference LLM: inference.LLM handles max_tokens via model settings, not extra_body
+        # We return minimal fields; entrypoint builds inference.LLM(model=..., reasoning=..., extra_kwargs={max_tokens})
+        if job_logger:
+            job_logger.info("LLM speed: provider=livekit model=%s max_tokens=%s (via LiveKit Inference, no extra API key)", model or "?", max_tokens)
+        return fields
     if prov == "cloudflare":
         raw = os.getenv("CLOUDFLARE_LLM_REASONING_EFFORT", "low").strip().lower()
         effort = "" if raw in {"", "default", "unset", "none"} else raw
@@ -233,14 +261,18 @@ def validate_llm_config(job_logger: logging.Logger | None = None) -> tuple[str, 
     model = llm_model()
     base_url = llm_base_url()
     api_key = llm_api_key()
-    if prov == "openrouter":
+    if prov == "livekit":
+        if not os.getenv("LIVEKIT_URL", "").strip() or not os.getenv("LIVEKIT_API_KEY", "").strip() or not os.getenv("LIVEKIT_API_SECRET", "").strip():
+            raise RuntimeError("LLM_PROVIDER=livekit requires LIVEKIT_URL, LIVEKIT_API_KEY and LIVEKIT_API_SECRET (same as STT/TTS). Set them in .env.")
+        # no separate API key needed
+    elif prov == "openrouter":
         if not api_key:
             raise RuntimeError("LLM_PROVIDER=openrouter requires OPENROUTER_API_KEY (get one at https://openrouter.ai/settings/keys — free tier available). Set it in .env and optionally OPENROUTER_LLM_MODEL.")
         if not base_url:
             base_url = "https://openrouter.ai/api/v1"
     else:  # cloudflare
         if not api_key or not os.getenv("CLOUDFLARE_ACCOUNT_ID", "").strip():
-            raise RuntimeError("LLM_PROVIDER=cloudflare requires CLOUDFLARE_ACCOUNT_ID and CLOUDFLARE_API_TOKEN. Or set LLM_PROVIDER=openrouter with OPENROUTER_API_KEY.")
+            raise RuntimeError("LLM_PROVIDER=cloudflare requires CLOUDFLARE_ACCOUNT_ID and CLOUDFLARE_API_TOKEN. Or set LLM_PROVIDER=livekit (no extra key) or LLM_PROVIDER=openrouter with OPENROUTER_API_KEY.")
     if job_logger:
         job_logger.info("LLM provider=%s model=%s base_url=%s", prov, model, base_url)
     return prov, model, base_url
