@@ -130,7 +130,19 @@ export default function App() {
       });
       room.on(RoomEvent.AudioPlaybackStatusChanged, () => { const blocked = !room.canPlaybackAudio; s.setAudioNeedsGesture(blocked); addLog(blocked ? 'warning' : 'info', blocked ? 'مرورگر پخش خودکار صدا را مسدود کرد' : 'پخش صدا فعال است'); });
       room.on(RoomEvent.Disconnected, (reason) => addLog('warning', 'اتصال LiveKit قطع شد', String(reason || 'بدون جزئیات')));
-      await room.connect(data.serverUrl, data.token);
+      // Diagnostic: log sanitized URL (no token) and SDK version before connect
+      try { const u = new URL(data.serverUrl); addLog('info', 'اتصال LiveKit', `url=${u.protocol}//${u.host}${u.pathname} sdk=${Room.version || 'unknown'}`); } catch {}
+      try {
+        await room.connect(data.serverUrl, data.token);
+      } catch (connectErr) {
+        const msg = connectErr instanceof Error ? connectErr.message : String(connectErr);
+        const stack = connectErr instanceof Error ? (connectErr.stack || '') : '';
+        const isBlobJson = msg.includes('[object Blob]') || msg.includes('Unexpected token');
+        if (isBlobJson) {
+          addLog('error', 'سیگنال LiveKit: پیام Blob به‌جای JSON/ArrayBuffer', `msg=${msg.slice(0, 300)} · hint=Worker binary passthrough broken or binaryType!=arraybuffer · stack=${stack.slice(0, 800)}`);
+        }
+        throw connectErr;
+      }
       s.startingRef.current = false; s.setPhase('connected');
       addLog('success', 'به اتاق LiveKit متصل شدیم', `room=${data.roomName || 'unknown'} · agent=${s.health?.agentName || 'configured agent'}`);
       try { await room.localParticipant.setMicrophoneEnabled(true); s.setMicEnabled(true); addLog('success', 'میکروفون فعال شد'); } catch (error) { s.setMicEnabled(false); addLog('warning', 'میکروفون در دسترس نیست؛ چت متنی همچنان فعال است', errorMessage(error)); }

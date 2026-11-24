@@ -1,13 +1,14 @@
 /**
  * Cloudflare Worker — LiveKit signaling proxy (frontend only)
  * Frontend: wss://<worker>.workers.dev  →  wss://horno-avatar-jr68tfeq.livekit.cloud
- * Backend MUST use LIVEKIT_API_URL=https://horno-avatar-jr68tfeq.livekit.cloud directly (never this Worker).
+ * Backend MUST use LIVEKIT_API_URL=https://horno-avatar-jr68tfeq.livekit.cloud directly.
  *
- * LiveKit signaling = Protobuf over WebSocket (binary frames) interleaved with JSON.
- * Do NOT JSON.parse / stringify frames here — preserve binary verbatim.
- * Use the native fetch-passthrough so Cloudflare preserves Upgrade, message boundaries and ordering.
+ * CRITICAL: Do not construct a new Response for WebSocket upgrades.
+ * Workers must return fetch(upstreamRequest) directly to preserve 101 Switching
+ * Protocols, binary Protobuf frames, and message ordering. Wrapping in
+ * new Response(..., {webSocket}) mangles binary → Blob → "[object Blob]" JSON error
+ * in livekit-client's parseSignalResponse (utils.mjs:29 JSON.parse(value)).
  */
-
 export default {
   async fetch(request, env) {
     const url = new URL(request.url);
@@ -16,7 +17,6 @@ export default {
 
     if (request.method === "OPTIONS") return corsResponse(null, allowedOrigins, request);
 
-    // Backend RoomService must NOT go through WS proxy (would 426)
     if (url.pathname.startsWith("/twirp/")) {
       return new Response(
         JSON.stringify({
@@ -31,40 +31,22 @@ export default {
     const upgrade = request.headers.get("Upgrade");
     const isWebSocket = upgrade && upgrade.toLowerCase() === "websocket";
 
-    // WebSocket signaling: preserve Upgrade/Connection/Sec-WebSocket-* verbatim via native proxy
     if (isWebSocket) {
       const upstreamUrl = new URL(request.url);
       upstreamUrl.hostname = livekitHost;
       upstreamUrl.protocol = "https:";
       upstreamUrl.port = "";
-      // Clone request with upstream host, keep all WS headers/body intact
+      // Must preserve all WS handshake headers verbatim; do not wrap Response.
       const upstreamRequest = new Request(upstreamUrl.toString(), request);
       upstreamRequest.headers.set("host", livekitHost);
       upstreamRequest.headers.set("x-forwarded-host", url.hostname);
       const ip = request.headers.get("cf-connecting-ip");
       if (ip) upstreamRequest.headers.set("x-real-ip", ip);
-      upstreamRequest.headers.set("x-proxied-by", "livekit-ws-proxy");
-
-      try {
-        // Native fetch passthrough preserves 101 Switching Protocols and binary frames
-        const upstreamResponse = await fetch(upstreamRequest);
-        // Add CORS/expose headers (safe to mutate)
-        const headers = new Headers(upstreamResponse.headers);
-        for (const [k, v] of Object.entries(corsHeaders(allowedOrigins, request))) headers.set(k, v);
-        headers.set("x-proxied-by", "livekit-ws-proxy");
-        headers.set("x-upstream-host", livekitHost);
-        return new Response(upstreamResponse.body, {
-          status: upstreamResponse.status,
-          statusText: upstreamResponse.statusText,
-          headers,
-          webSocket: upstreamResponse.webSocket ?? undefined,
-        });
-      } catch (err) {
-        return jsonError(502, "WebSocket proxy failed", err, allowedOrigins, request);
-      }
+      // Do NOT add webSocket to init; return fetch directly per CF docs:
+      // https://developers.cloudflare.com/workers/examples/websockets/#reverse-proxies--forwarding-websockets
+      return fetch(upstreamRequest);
     }
 
-    // Non-WS HTTP: allow only LiveKit signaling paths (not an open proxy)
     const ALLOWED_HTTP_PREFIXES = ["/rtc", "/cluster", "/validate", "/health"];
     const isAllowedHttp = ALLOWED_HTTP_PREFIXES.some((p) => url.pathname.startsWith(p));
     if (!isAllowedHttp && url.pathname !== "/" && url.pathname !== "") {
