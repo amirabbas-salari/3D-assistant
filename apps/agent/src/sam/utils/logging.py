@@ -9,15 +9,33 @@ class RoomLogHandler(logging.Handler):
         super().__init__(level=logging.INFO)
         self._publish_log = publish_log
         self._formatter = logging.Formatter()
+        # cache main loop at init — RAG runs in to_thread without loop
+        try:
+            self._loop = asyncio.get_running_loop()
+        except RuntimeError:
+            self._loop = None
     def emit(self, record):
         try:
             try:
                 msg = record.getMessage()
             except Exception:
-                # Bad % formatting — never crash the job
                 msg = str(record.msg)
             details = self._formatter.formatException(record.exc_info) if record.exc_info else ""
             payload = {"type":"system_log","level":record.levelname.lower(),"message":redact(msg)[:1600],"details":redact(details)[:2600],"logger":record.name}
-            asyncio.get_running_loop().create_task(self._publish_log(payload))
+            try:
+                loop = asyncio.get_running_loop()
+                loop.create_task(self._publish_log(payload))
+                return
+            except RuntimeError:
+                pass
+            if self._loop is not None:
+                try:
+                    self._loop.call_soon_threadsafe(lambda: self._loop.create_task(self._publish_log(payload)))
+                    return
+                except Exception:
+                    pass
         except Exception:
-            self.handleError(record)
+            try:
+                self.handleError(record)
+            except Exception:
+                pass
