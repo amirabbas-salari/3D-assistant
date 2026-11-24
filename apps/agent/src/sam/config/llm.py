@@ -139,8 +139,7 @@ def llm_request_body(max_tokens: int, job_logger: logging.Logger | None = None, 
         return fields
     else:  # openrouter
         # Reasoning models (qwen3, deepseek-r1, qwq, o1/o3, qwen3.5) output thinking by default
-        # حتی با reasoning.exclude باز بعضی مدل‌ها thinking را داخل content می‌ریزند → فیلتر کلاینت هم لازم است
-        # OpenRouter supports reasoning.exclude to strip it at the gateway (faster + no leak)
+        # ۳ لایه دفاع: 1) خودِ مدل را مجبور کنیم فکر نکند 2) OpenRouter reasoning را exclude کند 3) فیلتر کلاینت
         reasoning_models = (
             "qwen3",
             "qwen-3",
@@ -154,20 +153,34 @@ def llm_request_body(max_tokens: int, job_logger: logging.Logger | None = None, 
             "r1-distill",
             "qwen/qwen3",
         )
-        # qwen/qwen3.5-flash هم شامل می‌شود (qwen3 زیررشته است)
         is_reasoning = any(k in model.lower() for k in reasoning_models) if model else False
-        # برای voice همیشه exclude، مگر کاربر صراحتاً بخواهد
-        if is_reasoning:
-            if os.getenv("OPENROUTER_INCLUDE_REASONING", "").strip().lower() not in {"1", "true", "yes", "on"}:
-                fields["reasoning"] = {"exclude": True}
+        # اگر کاربر صراحتاً خواسته thinking روشن بماند — احترام بگذار
+        if is_reasoning and os.getenv("OPENROUTER_INCLUDE_REASONING", "").strip().lower() in {"1", "true", "yes", "on"}:
+            raw = os.getenv("OPENROUTER_REASONING_EFFORT", "").strip().lower() or os.getenv("OPENROUTER_LLM_REASONING_EFFORT", "").strip().lower()
+            effort = "" if raw in {"", "default", "unset", "none"} else raw
+            if effort in {"low", "medium", "high"}:
+                fields["reasoning"] = {"effort": effort}
                 if job_logger:
-                    job_logger.info(
-                        "LLM speed: provider=openrouter model=%s reasoning=excluded (voice, hidden) — فیلتر کلاینت هم فعال, max_tokens=%s",
-                        model or "?",
-                        max_tokens,
-                    )
-                return fields
-            # اگر کاربر include کرده، effort را هم بخوان
+                    job_logger.info("LLM speed: provider=openrouter model=%s reasoning=%s (explicit include), max_tokens=%s", model or "?", effort, max_tokens)
+            elif job_logger:
+                job_logger.info("LLM speed: provider=openrouter model=%s reasoning=included, max_tokens=%s", model or "?", max_tokens)
+            return fields
+        # حالت پیش‌فرض voice: thinking کاملاً خاموش
+        if is_reasoning:
+            # لایه ۱: به خودِ مدل بگو فکر نکند (Qwen3/QwQ از این فلگ پشتیبانی می‌کنند)
+            # لایه ۲: به OpenRouter بگو reasoning را از خروجی حذف کند
+            fields["reasoning"] = {"exclude": True}
+            # Qwen3-specific: chat_template_kwargs / enable_thinking
+            # بعضی نسخه‌های Qwen روی OpenRouter فقط با این خاموش می‌شوند
+            fields["chat_template_kwargs"] = {"enable_thinking": False}
+            fields["enable_thinking"] = False
+            if job_logger:
+                job_logger.info(
+                    "LLM speed: provider=openrouter model=%s reasoning=DISABLED (enable_thinking=false + exclude) — فیلتر کلاینت هم فعال, max_tokens=%s",
+                    model or "?",
+                    max_tokens,
+                )
+            return fields
         raw = os.getenv("OPENROUTER_REASONING_EFFORT", "").strip().lower() or os.getenv("OPENROUTER_LLM_REASONING_EFFORT", "").strip().lower()
         effort = "" if raw in {"", "default", "unset", "none"} else raw
         if effort in {"low", "medium", "high"}:
