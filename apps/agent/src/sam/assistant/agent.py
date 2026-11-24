@@ -23,7 +23,8 @@ class PersianAssistant(Agent):
         if fast_start:
             instructions += (" فقط ۱ جمله‌ی کوتاه (۵ تا ۹ کلمه) که جواب اصلی توشه + ۱ سوال کوتاه (۳ تا ۷ کلمه). بیشتر از ۲ جمله نشو. مقدمه‌چینی، «حتما»، «سوال خوبیه» ممنوع. هر جمله یه فکر کامل باشه، نه تکه‌تکه.")
         # جلوگیری از نشت Chain-of-Thought (در لاگ دیده شد: مدل qwen فکر را با Thinking Process نشان داد)
-        instructions += " هرگز فرآیند فکر، تحلیل داخلی، Thinking Process یا Chain-of-Thought را نمایش نده — فقط پاسخ نهایی فارسی کوتاه را بده. تگ <think> یا **Analyze** ننویس."
+        # تکرار با تاکید — qwen حتی با reasoning.exclude باز thinking را داخل content می‌ریزد
+        instructions += " ⛔ هرگز thinking/thought process/chain-of-thought/تحلیل داخلی/مراحل فکر را ننویس — حتی یک کلمه انگلیسیِ thinking نمایش نده. پاسخ را مستقیم به فارسی شروع کن (مثلاً «سلام!»)."
         # Cloudflare Workers AI (gpt-oss-120b) با ابزار function-calling ناسازگار است و خطای 400
         # "array not in string" می‌دهد. پس به صورت پیش‌فرض ابزار را خاموش می‌کنیم و از preload استفاده می‌کنیم.
         use_tool = False
@@ -104,60 +105,247 @@ class PersianAssistant(Agent):
                 pass
         # فراخوانی پیاده‌سازی پیش‌فرض Agent
         stream = super().llm_node(chat_ctx, tools, model_settings)
-        # فیلتر نشت Thinking / chain-of-thought (در لاگ qwen دیده شد: "Thinking Process:" به عنوان جواب)
-        _in_think = False
-        _think_markers = ("<think>", "Thinking Process", "Analyze the Request", "**Analysis", "Chain-of-Thought")
+
+        # ── فیلتر مقاوم Thinking ──────────────────────────────────────
+        # qwen حتی با reasoning.exclude باز thinking را داخل content می‌ریزد
+        # و گاهی lower-case «thinking proccess» + غلط املایی. باید:
+        # 1) <think>...</think> را کامل حذف کنیم (حتی اگر چند chunk طول بکشد)
+        # 2) هدرهای انگلیسی ابتدای پاسخ را تا اولین حرف فارسی ببریم
+        # 3) case-insensitive باشیم
+        import re as _re
+
+        _PERSIAN_RE = _re.compile(r"[\u0600-\u06FF]")
+        # هر خط انگلیسی که بوی thinking دهد — حتی با غلط املایی proccess/process
+        _THINK_KEYWORDS = ("thinking", "thought", "think", "chain", "reasoning", "analyze", "analysis")
+        _PROCCESS_RE = _re.compile(r"thinking\s+proce+ss+", _re.I)
+        # هدر کامل Thinking Process: ... تا خط خالی
+        _THINK_HEADER_RE = _re.compile(
+            r"^\s*(?:thinking(?:\s+proce+ss*)?|thought\s+proce+ss*|chain[-\s]*of[-\s]*thought|analyze[^\n]*|analysis[^\n]*|reasoning[^\n]*)\s*[:\-–—]*\s*\n+",
+            _re.I,
+        )
+
+        def _looks_like_thinking_prefix(prefix: str) -> bool:
+            low = prefix.lower()
+            # اگر prefix کوتاه (<800) و انگلیسی‌محور است و کلمه thinking دارد → thinking است
+            if any(k in low for k in _THINK_KEYWORDS):
+                # اگر فارسی در prefix نیست، قطعاً thinking است
+                if not _PERSIAN_RE.search(prefix):
+                    return True
+                # اگر فارسی هست ولی قبل از اولین فارسی، thinking بوده → prefix تا فارسی را ببر
+                return True
+            # هدر با شماره‌گذاری انگلیسی مثل "1. Analyze..." هم thinking است
+            if _re.search(r"^\s*\d+\.\s*(analyze|step|reason)", low, _re.M):
+                return True
+            return False
+
+        def _strip_thinking_prefix(text: str) -> str:
+            # 1) <think>...</think> کامل
+            text = _re.sub(r"<think>.*?</think>", "", text, flags=_re.I | _re.S)
+            # 2) <think> باز بدون بسته (تا آخر بافر)
+            if _re.search(r"<think>", text, _re.I):
+                # اگر بسته نشده، کل بعد از آن را فعلاً thinking بدان
+                text = _re.split(r"<think>", text, flags=_re.I)[0]
+            # 3) هدرهای انگلیسی تکراری در ابتدا
+            # چند بار تکرار کن تا "Thinking Process:\n1. Analyze...\n2. Decide..." پاک شود
+            for _ in range(4):
+                m = _THINK_HEADER_RE.match(text)
+                if m:
+                    text = text[m.end():]
+                    continue
+                # خطوط شماره‌دار انگلیسی ابتدای متن
+                m2 = _re.match(r"^\s*\d+\.\s+[A-Za-z][^\n]*\n+", text)
+                if m2 and not _PERSIAN_RE.search(m2.group(0)):
+                    # فقط اگر خط فارسی ندارد
+                    text = text[m2.end():]
+                    continue
+                break
+            # 4) اگر هنوز thinking + فارسی قاطی است، از اولین حرف فارسی شروع کن
+            # مثلا "Thinking Process: ... \n\nسلام!" → "سلام!"
+            low = text.lower()
+            if any(k in low for k in _THINK_KEYWORDS):
+                m_fa = _PERSIAN_RE.search(text)
+                if m_fa and m_fa.start() > 0:
+                    prefix = text[: m_fa.start()]
+                    if _looks_like_thinking_prefix(prefix):
+                        text = text[m_fa.start():]
+            return text.lstrip()
+
+        _in_think_tag = False
+        _head_buf = ""  # بافر ابتدای پاسخ تا فارسی ظاهر شود
+        _head_done = False
+        # بعد از _head_done دیگر نیازی به بافر نیست، فقط تگ‌ها را سریع حذف کن
+
         async for chunk in stream:
-            if tracker is not None:
-                try:
-                    # chunk.delta.content حاوی تکه‌ای از توکن است
-                    delta = getattr(chunk, "delta", None)
-                    text = getattr(delta, "content", None) if delta else None
-                    if text:
-                        tracker.on_llm_token(text)
-                except Exception:
-                    pass
-            # فیلتر Thinking: اگر chunk حاوی تگ فکر است، آن را حذف کن
             try:
                 delta = getattr(chunk, "delta", None)
                 content = getattr(delta, "content", None) if delta else None
-                if content:
-                    # detect start/end of think block
-                    if "<think>" in content:
-                        _in_think = True
-                        # strip the tag itself and anything before it if it's thinking
-                        # if content is pure think, skip
-                        if content.strip().startswith("<think>"):
+                if not content:
+                    yield chunk
+                    continue
+
+                # ── مرحله 1: بافر ابتدای استریم (برای جلوگیری از TTS زودهنگام) ──
+                if not _head_done:
+                    _head_buf += content
+
+                    # تگ باز/بسته را دنبال کن
+                    low_buf = _head_buf.lower()
+                    if "<think>" in low_buf:
+                        _in_think_tag = True
+                    if "</think>" in low_buf:
+                        # هرچه تا </think> بوده thinking است → دور بریز
+                        parts = _re.split(r"</think>", _head_buf, flags=_re.I)
+                        _head_buf = parts[-1] if len(parts) > 1 else ""
+                        _in_think_tag = False
+                        # بعد از بستن تگ، ممکن است هنوز header بماند → ادامه بافر
+                        if not _head_buf.strip():
                             continue
-                    if "</think>" in content:
-                        _in_think = False
-                        # skip the tag, but allow content after it
-                        after = content.split("</think>", 1)[-1]
-                        if not after.strip():
+                    if _in_think_tag:
+                        # هنوز داخل <think> هستیم → چیزی نفرست (حتی اگر فارسی در بافر باشد، داخل تگ است)
+                        # ولی اگر بافر خیلی بزرگ شد (>3000) احتمالاً تگ بسته نشده → بشکن
+                        if len(_head_buf) < 3000:
                             continue
-                        # rewrite chunk content without think part
+                        else:
+                            _in_think_tag = False
+
+                    # سعی کن هدر thinking را پاک کنی
+                    cleaned = _strip_thinking_prefix(_head_buf)
+
+                    # آیا cleaned حاوی فارسی است؟
+                    has_fa = bool(_PERSIAN_RE.search(cleaned))
+                    # آیا هنوز بوی thinking می‌دهد و فارسی ندارد؟
+                    still_thinking = (
+                        not has_fa and _looks_like_thinking_prefix(cleaned) and len(cleaned) < 2000
+                    )
+
+                    if still_thinking:
+                        # هنوز thinking است → به بافر ادامه بده، چیزی نفرست
+                        _head_buf = cleaned
+                        continue
+
+                    # اگر فارسی دارد → آماده ارسال
+                    if has_fa:
+                        # cleaned را به عنوان محتوای همین chunk بفرست
+                        # اگر cleaned کوتاه‌تر از _head_buf بود یعنی thinking حذف شد → لاگ کن
+                        if len(cleaned) < len(_head_buf) - 20:
+                            try:
+                                import logging as _lg
+
+                                _lg.getLogger("sam.thinking-filter").info(
+                                    "Thinking prefix stripped (%d→%d chars)", len(_head_buf), len(cleaned)
+                                )
+                            except Exception:
+                                pass
+                        _head_done = True
+                        # tracker فقط برای محتوای تمیز
+                        if tracker is not None:
+                            try:
+                                tracker.on_llm_token(cleaned)
+                            except Exception:
+                                pass
                         try:
-                            chunk.delta.content = after  # type: ignore
+                            chunk.delta.content = cleaned  # type: ignore
                         except Exception:
                             pass
-                        _in_think = False
                         yield chunk
                         continue
-                    if _in_think:
+
+                    # اگر فارسی ندارد ولی طول بافر زیاد شد (>1200) و دیگر thinking نیست
+                    # (مثلاً پاسخ انگلیسیِ مشروع) → بفرست
+                    if len(_head_buf) >= 1200:
+                        _head_done = True
+                        cleaned2 = _strip_thinking_prefix(_head_buf)
+                        if tracker is not None:
+                            try:
+                                tracker.on_llm_token(cleaned2)
+                            except Exception:
+                                pass
+                        try:
+                            chunk.delta.content = cleaned2  # type: ignore
+                        except Exception:
+                            pass
+                        yield chunk
                         continue
-                    # also filter verbose thinking headers (seen in qwen log)
-                    if any(m in content for m in _think_markers):
-                        # if the chunk is purely thinking header, skip
-                        stripped = content.strip()
-                        if stripped.startswith("Thinking") or stripped.startswith("1.") and "Analyze" in stripped:
+
+                    # در غیر این صورت هنوز اول راهیم و فارسی نیامده → صبر کن
+                    # برای جلوگیری از سکوت کامل، اگر بافر >400 و thinking نیست، بفرست
+                    if len(_head_buf) > 400 and not _looks_like_thinking_prefix(_head_buf):
+                        _head_done = True
+                        cleaned3 = _strip_thinking_prefix(_head_buf)
+                        if tracker is not None:
+                            try:
+                                tracker.on_llm_token(cleaned3)
+                            except Exception:
+                                pass
+                        try:
+                            chunk.delta.content = cleaned3  # type: ignore
+                        except Exception:
+                            pass
+                        yield chunk
+                        continue
+
+                    # هنوز تصمیم نگرفتیم → هیچ چیز نفرست، به بافر ادامه بده
+                    continue
+
+                # ── مرحله 2: بعد از عبور از هدر — فقط تگ‌های پراکنده را پاک کن ──
+                low = content.lower()
+                if "<think>" in low or "</think>" in low:
+                    if "<think>" in low:
+                        _in_think_tag = True
+                        # اگر محتوا با <think> شروع می‌شود، فعلاً نفرست
+                        if content.strip().lower().startswith("<think>"):
                             continue
-                        # if it contains thinking but also real answer, try to strip prefix
-                        # heuristic: skip if it starts with Thinking Process
-                        if content.lstrip().startswith("Thinking Process"):
+                    if "</think>" in low:
+                        _in_think_tag = False
+                        after = _re.split(r"</think>", content, flags=_re.I)[-1]
+                        if not after.strip():
                             continue
+                        content = after
+                        try:
+                            chunk.delta.content = content  # type: ignore
+                        except Exception:
+                            pass
+                    if _in_think_tag:
+                        continue
+                if _in_think_tag:
+                    continue
+
+                # تمیزکاری سریع برای chunkهای میانی (اگر مدل وسط پاسخ دوباره thinking بریزد)
+                # فقط اگر chunk با thinking شروع شود
+                if content.lstrip().lower().startswith("thinking"):
+                    cleaned_mid = _strip_thinking_prefix(content)
+                    if not cleaned_mid.strip():
+                        continue
+                    content = cleaned_mid
+                    try:
+                        chunk.delta.content = content  # type: ignore
+                    except Exception:
+                        pass
+
+                if tracker is not None:
+                    try:
+                        tracker.on_llm_token(content)
+                    except Exception:
+                        pass
+
             except Exception:
                 pass
             yield chunk
+
+        # اگر استریم تمام شد ولی _head_buf هنوز نفرستاده بودیم (مثلاً پاسخ فقط thinking بود)
+        if not _head_done and _head_buf:
+            try:
+                final = _strip_thinking_prefix(_head_buf)
+                if final.strip():
+                    # یک chunk ساختگی بساز — ساده‌ترین: لاگ کن و رد شو
+                    # چون نمی‌توان chunk جدید ساخت، فقط tracker را ببند
+                    if tracker is not None:
+                        try:
+                            tracker.on_llm_token(final)
+                        except Exception:
+                            pass
+            except Exception:
+                pass
+
         if tracker is not None:
             try:
                 tracker.on_llm_end()
