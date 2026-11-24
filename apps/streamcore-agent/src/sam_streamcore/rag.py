@@ -5,12 +5,15 @@ RAG نازک — از apps/agent بازاستفاده، ولی بدون وابس
 import os
 from pathlib import Path
 
-PROJECT_ROOT = Path(__file__).resolve().parents[4]
+_par = Path(__file__).resolve().parents
+PROJECT_ROOT = _par[4] if len(_par) > 4 else _par[-1]
 if not (PROJECT_ROOT / ".env.example").exists():
-    for anc in Path(__file__).resolve().parents:
+    for anc in _par:
         if (anc / ".env.example").exists():
             PROJECT_ROOT = anc
             break
+    else:
+        PROJECT_ROOT = Path("/app") if Path("/app/prompts").exists() else Path.cwd()
 
 def _try_load_rag():
     try:
