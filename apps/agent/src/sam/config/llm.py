@@ -138,8 +138,26 @@ def llm_request_body(max_tokens: int, job_logger: logging.Logger | None = None, 
             job_logger.info("LLM speed: provider=cloudflare model=%s reasoning_effort=%s, max_tokens=%s", model or "?", effort or "provider default", max_tokens)
         return fields
     else:  # openrouter
-        # OpenRouter is OpenAI-compatible; reasoning is model-specific and usually auto-handled
-        # We don't send reasoning_effort for generic OpenRouter models unless user explicitly sets OPENROUTER_REASONING_EFFORT
+        # Reasoning models thinking را داخل content می‌ریزند → ۳ لایه دفاع
+        reasoning_models = ("qwen3", "qwen-3", "qwen3.5", "deepseek-r1", "qwq", "o1", "o3", "gpt-oss", "reasoning", "thinking", "r1-distill", "qwen/qwen3")
+        is_reasoning = any(k in model.lower() for k in reasoning_models) if model else False
+        if is_reasoning and os.getenv("OPENROUTER_INCLUDE_REASONING", "").strip().lower() in {"1", "true", "yes", "on"}:
+            raw = os.getenv("OPENROUTER_REASONING_EFFORT", "").strip().lower() or os.getenv("OPENROUTER_LLM_REASONING_EFFORT", "").strip().lower()
+            effort = "" if raw in {"", "default", "unset", "none"} else raw
+            if effort in {"low", "medium", "high"}:
+                fields["reasoning"] = {"effort": effort}
+                if job_logger:
+                    job_logger.info("LLM speed: provider=openrouter model=%s reasoning=%s (explicit include), max_tokens=%s", model or "?", effort, max_tokens)
+            elif job_logger:
+                job_logger.info("LLM speed: provider=openrouter model=%s reasoning=included, max_tokens=%s", model or "?", max_tokens)
+            return fields
+        if is_reasoning:
+            fields["reasoning"] = {"exclude": True}
+            fields["chat_template_kwargs"] = {"enable_thinking": False}
+            fields["enable_thinking"] = False
+            if job_logger:
+                job_logger.info("LLM speed: provider=openrouter model=%s reasoning=DISABLED (enable_thinking=false + exclude), max_tokens=%s", model or "?", max_tokens)
+            return fields
         raw = os.getenv("OPENROUTER_REASONING_EFFORT", "").strip().lower() or os.getenv("OPENROUTER_LLM_REASONING_EFFORT", "").strip().lower()
         effort = "" if raw in {"", "default", "unset", "none"} else raw
         if effort in {"low", "medium", "high"}:

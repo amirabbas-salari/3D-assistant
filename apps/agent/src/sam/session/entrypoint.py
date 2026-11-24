@@ -22,6 +22,17 @@ except ImportError:
 
 logger = logging.getLogger("sam.session.entrypoint")
 
+# Prewarm heavy imports — avoids 1s+ SSL blocks on first use (see log: click.termui → ssl.create_default_context)
+try:
+    import click.types  # noqa: F401
+except Exception:
+    pass
+for _n in ("chromadb", "chromadb.config", "chromadb.telemetry.posthog"):
+    try:
+        logging.getLogger(_n).setLevel(logging.WARNING)
+    except Exception:
+        pass
+
 async def entrypoint(ctx: agents.JobContext) -> None:
     await ctx.connect()
 
@@ -95,10 +106,19 @@ async def entrypoint(ctx: agents.JobContext) -> None:
     )
 
     # STT and TTS providers can be set independently; TTS_PROVIDER overrides SPEECH_PROVIDER for TTS
+    # httpx SSL creation blocks ~1s → offload to thread (fixes 1180ms/1017ms warnings)
     stt_prov = stt_provider()
     tts_prov = tts_provider()
-    stt = build_stt(stt_prov, model=stt_model, language=stt_language, conn_options=inference_conn_options, fallback=stt_fallback_models, job_logger=job_logger)
-    tts = build_tts(tts_prov, model=livekit_tts_model, voice=livekit_tts_voice, language=tts_language, conn_options=inference_conn_options, job_logger=job_logger)
+    try:
+        stt, tts = await asyncio.gather(
+            asyncio.to_thread(build_stt, stt_prov, model=stt_model, language=stt_language, conn_options=inference_conn_options, fallback=stt_fallback_models, job_logger=job_logger),
+            asyncio.to_thread(build_tts, tts_prov, model=livekit_tts_model, voice=livekit_tts_voice, language=tts_language, conn_options=inference_conn_options, job_logger=job_logger),
+        )
+        job_logger.info("STT/TTS built via thread (SSL offloaded)")
+    except Exception as e:
+        job_logger.warning("STT/TTS thread build failed (%s) — fallback to sync", e)
+        stt = build_stt(stt_prov, model=stt_model, language=stt_language, conn_options=inference_conn_options, fallback=stt_fallback_models, job_logger=job_logger)
+        tts = build_tts(tts_prov, model=livekit_tts_model, voice=livekit_tts_voice, language=tts_language, conn_options=inference_conn_options, job_logger=job_logger)
     # تضمین streaming: حتی اگر TTS اصلی streaming نباشد، با StreamAdapter جمله‌ای stream می‌شود (سرعت +30%)
     if not getattr(tts.capabilities, "streaming", False):
         try:
@@ -125,8 +145,10 @@ async def entrypoint(ctx: agents.JobContext) -> None:
     if tts_prov == "openrouter" and os.getenv("OPENROUTER_TTS_FALLBACK", "true").strip().lower() not in {"0", "false", "no", "off", ""}:
         try:
             from livekit.agents.tts import FallbackAdapter
-
-            fallback_tts = build_tts("inference", model=livekit_tts_model, voice=livekit_tts_voice, language=tts_language, conn_options=inference_conn_options, job_logger=job_logger)
+            try:
+                fallback_tts = await asyncio.to_thread(build_tts, "inference", model=livekit_tts_model, voice=livekit_tts_voice, language=tts_language, conn_options=inference_conn_options, job_logger=job_logger)
+            except Exception:
+                fallback_tts = build_tts("inference", model=livekit_tts_model, voice=livekit_tts_voice, language=tts_language, conn_options=inference_conn_options, job_logger=job_logger)
             job_logger.info("OpenRouter TTS fallback enabled: primary=openrouter/%s → fallback=inference/%s", or_tts_model, livekit_tts_model)
             # FallbackAdapter will try primary, then fallback on failure (e.g. 402)
             tts = FallbackAdapter([tts, fallback_tts])  # type: ignore
@@ -282,9 +304,9 @@ async def entrypoint(ctx: agents.JobContext) -> None:
 
     extra_body = llm_request_body(llm_max_tokens, job_logger, model=llm_model)
 
-    # هشدار مدل کند: gpt-oss / reasoning برای voice مناسب نیست (TTFT 1-5s)
-    if "gpt-oss" in llm_model.lower() or "deepseek-r1" in llm_model.lower() or "o1" in llm_model.lower():
-        job_logger.warning("LLM=%s کند است (TTFT 1-5s, reasoning). برای <1s از openai/gpt-4o-mini یا google/gemini-2.0-flash-001 یا meta-llama/llama-3.3-70b-instruct استفاده کنید", llm_model)
+    # هشدار مدل کند: gpt-oss / reasoning برای voice مناسب نیست (TTFT 1-5s, لاگ فعلی  openai/gpt-oss-120b )
+    if any(k in llm_model.lower() for k in ("gpt-oss", "deepseek-r1", "o1", "o3", "qwen3", "qwq", "r1-distill")):
+        job_logger.warning("LLM=%s کند است (TTFT 1-5s, reasoning / Thinking). برای <1s از openai/gpt-4o-mini یا google/gemini-2.0-flash-001 یا meta-llama/llama-3.3-70b-instruct استفاده کنید — OPENROUTER_LLM_MODEL را عوض کنید", llm_model)
     # تذکر max_tokens بالا = تاخیر بیشتر (هر توکن اضافی = زمان)
     if llm_max_tokens > 200:
         job_logger.info("LLM max_tokens=%s بالا است؛ برای voice کمتر از 150 توصیه می‌شود (هر 10 توکن ~80ms)", llm_max_tokens)
