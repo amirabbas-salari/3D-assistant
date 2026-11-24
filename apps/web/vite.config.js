@@ -26,6 +26,8 @@ export default defineConfig({
       output: {
         manualChunks(id) {
           if (id.includes('/node_modules/livekit-client/')) return 'livekit';
+          if (id.includes('/node_modules/@spatius/')) return 'spatius';
+          if (id.includes('/node_modules/react')) return 'react-vendor';
         },
       },
     },
