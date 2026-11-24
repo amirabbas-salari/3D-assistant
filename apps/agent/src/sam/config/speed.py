@@ -3,13 +3,14 @@ import json, os, logging
 
 SPEED_PROFILES: dict[str, dict] = {
     "balanced": {"preemptive_generation": {"preemptive_tts": True, "max_speech_duration": 20.0}},
-    "fast": {"endpointing": {"min_delay": 0.2, "max_delay": 2.0}, "preemptive_generation": {"preemptive_tts": True, "max_speech_duration": 20.0}},
-    "fastest": {"endpointing": {"min_delay": 0.15, "max_delay": 1.5}, "preemptive_generation": {"preemptive_tts": True, "max_speech_duration": 30.0}},
-    # ultra: تعادل دقت/سرعت برای فارسی — افزایش‌های قبلی برای حل transcript دیررس بود
-    # حالا با دقت بالاتر: min_delay کمتر برای واکنش سریع، ولی max_delay محدود برای جلوگیری از انتظار طولانی
-    # اگر STT کند بود و warning دیدی، AGENT_MIN_ENDPOINTING_DELAY=0.25 بگذار
-    "ultra": {"endpointing": {"min_delay": 0.15, "max_delay": 1.0}, "preemptive_generation": {"preemptive_tts": True, "max_speech_duration": 40.0}, "interruption": {"min_duration": 0.5, "false_interruption_timeout": 0.5}},
-    "instant": {"endpointing": {"min_delay": 0.08, "max_delay": 0.8}, "preemptive_generation": {"preemptive_tts": True, "max_speech_duration": 40.0}, "interruption": {"min_duration": 0.4, "false_interruption_timeout": 0.4}},
+    # تحلیل لاگ ۲۵ نوامبر: گلوگاه اصلی endpointing با میانگین 940ms و بدترین 1.79s
+    # علت: probability کمِ turn-detector برای جملات کوتاه فارسی (سلام=0.07) → max_delay=1.0 انتظار کامل
+    # فیکس: max_delay به شدت کاهش یافت تا بدترین حالت هم <0.6s شود؛ min_delay هم کمتر برای پاسخ فوری
+    "fast": {"endpointing": {"min_delay": 0.15, "max_delay": 1.0}, "preemptive_generation": {"preemptive_tts": True, "max_speech_duration": 20.0}},
+    "fastest": {"endpointing": {"min_delay": 0.12, "max_delay": 0.8}, "preemptive_generation": {"preemptive_tts": True, "max_speech_duration": 30.0}},
+    # ultra: بهینه برای مکالمه طبیعی فارسی — میانگین تاخیر ~300ms به جای 940ms
+    "ultra": {"endpointing": {"min_delay": 0.12, "max_delay": 0.6}, "preemptive_generation": {"preemptive_tts": True, "max_speech_duration": 40.0}, "interruption": {"min_duration": 0.4, "false_interruption_timeout": 0.4}},
+    "instant": {"endpointing": {"min_delay": 0.08, "max_delay": 0.4}, "preemptive_generation": {"preemptive_tts": True, "max_speech_duration": 40.0}, "interruption": {"min_duration": 0.3, "false_interruption_timeout": 0.3}},
 }
 
 def speed_profile(job_logger: logging.Logger) -> dict:
