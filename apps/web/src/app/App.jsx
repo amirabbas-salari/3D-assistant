@@ -103,7 +103,14 @@ export default function App() {
 
       room.on(RoomEvent.DataReceived, (payload) => {
         try {
-          const packet = JSON.parse(new TextDecoder().decode(payload));
+          // LiveKit DataChannel: payload is Uint8Array per SDK, but be defensive —
+          // never JSON.parse a Blob; Protobuf signaling is handled by livekit-client itself.
+          let bytes;
+          if (payload instanceof Uint8Array) bytes = payload;
+          else if (payload instanceof ArrayBuffer) bytes = new Uint8Array(payload);
+          else if (typeof payload === 'string') bytes = new TextEncoder().encode(payload);
+          else { addLog('warning', 'بسته‌ی داده نوع ناشناس', `type=${Object.prototype.toString.call(payload)}`); return; }
+          const packet = JSON.parse(new TextDecoder().decode(bytes));
           if (packet.type === 'system_log') addLog(packet.level, packet.message, packet.details || '');
           else if (packet.type === 'user_transcript' && typeof packet.text === 'string') { if (packet.final) { addChat('user', packet.text, 'voice'); s.setDraftTranscript(''); } else s.setDraftTranscript(packet.text); }
           else if (packet.type === 'latency') { s.setLatency(packet); if (packet.last) addLog('info', 'زمان‌بندی نوبت', formatLatency(packet)); }
