@@ -123,6 +123,19 @@ class PersianAssistant(Agent):
             r"^\s*(?:thinking(?:\s+proce+ss*)?|thought\s+proce+ss*|chain[-\s]*of[-\s]*thought|analyze[^\n]*|analysis[^\n]*|reasoning[^\n]*)\s*[:\-–—]*\s*\n+",
             _re.I,
         )
+        # نشت instructions / کد پایتون — مدل گاهی دستور greet را عیناً برمی‌گرداند
+        _INSTRUCTION_LEAK_PHRASES = (
+            "به فارسی گرم و کوتاه سلام کن",
+            "دستورات سیستمی را بازگو نکن",
+            "فقط همین را بگو",
+            "session.generate_reply",
+            "instructions=",
+            "user_input=",
+        )
+        _INSTRUCTION_LEAK_RE = _re.compile(
+            r"session\.generate_reply\s*\(.*?\)|instructions\s*=\s*\"[^\"]*\"|user_input\s*=\s*\"[^\"]*\"",
+            _re.I | _re.S,
+        )
 
         def _looks_like_thinking_prefix(prefix: str) -> bool:
             low = prefix.lower()
@@ -139,6 +152,16 @@ class PersianAssistant(Agent):
             return False
 
         def _strip_thinking_prefix(text: str) -> str:
+            # 0) نشت کد پایتون / instructions — اگر مدل کد را برگرداند، حذف کن
+            # مثلا: session.generate_reply(instructions="به فارسی گرم و کوتاه...")
+            if "session.generate_reply" in text or "instructions=" in text.lower():
+                text = _INSTRUCTION_LEAK_RE.sub("", text)
+                for phrase in _INSTRUCTION_LEAK_PHRASES:
+                    if phrase in text:
+                        text = text.replace(phrase, "")
+                text = text.strip()
+                if not text or len(text.strip(" \n\r\t\"'()`.,:؛،")) < 3:
+                    return "سلام! خوش آمدید — چطور می‌تونم کمکتون کنم؟"
             # 1) <think>...</think> کامل
             text = _re.sub(r"<think>.*?</think>", "", text, flags=_re.I | _re.S)
             # 2) <think> باز بدون بسته (تا آخر بافر)
@@ -159,6 +182,15 @@ class PersianAssistant(Agent):
                     text = text[m2.end():]
                     continue
                 break
+            # 3b) نشت instructions فارسی — اگر متن با "به فارسی گرم و کوتاه سلام کن..." شروع شده
+            for phrase in _INSTRUCTION_LEAK_PHRASES:
+                if phrase in text and len(text) < 400:
+                    # اگر کل متن کوتاه و فقط instructions را تکرار کرده → حذف
+                    low = text.lower()
+                    # اگر متن بیشتر از 70% شبیه instructions است، آن را به سلام واقعی تبدیل کن
+                    if phrase == "به فارسی گرم و کوتاه سلام کن" and text.strip().startswith("به فارسی"):
+                        return "سلام! خوش آمدید — چطور می‌تونم کمکتون کنم؟"
+                    text = text.replace(phrase, "")
             # 4) اگر هنوز thinking + فارسی قاطی است، از اولین حرف فارسی شروع کن
             # مثلا "Thinking Process: ... \n\nسلام!" → "سلام!"
             low = text.lower()
