@@ -138,9 +138,13 @@ def llm_request_body(max_tokens: int, job_logger: logging.Logger | None = None, 
             job_logger.info("LLM speed: provider=cloudflare model=%s reasoning_effort=%s, max_tokens=%s", model or "?", effort or "provider default", max_tokens)
         return fields
     else:  # openrouter
-        # Reasoning models thinking را داخل content می‌ریزند → ۳ لایه دفاع
-        reasoning_models = ("qwen3", "qwen-3", "qwen3.5", "deepseek-r1", "qwq", "o1", "o3", "gpt-oss", "reasoning", "thinking", "r1-distill", "qwen/qwen3")
-        is_reasoning = any(k in model.lower() for k in reasoning_models) if model else False
+        # Qwen/QwQ thinking را داخل content می‌ریزد — برای gpt-oss نباید enable_thinking=false فرستاد (خالی برمی‌گرداند)
+        qwen_models = ("qwen3", "qwen-3", "qwen3.5", "qwq", "qwen/qwen3")
+        gpt_oss = "gpt-oss" in model.lower() if model else False
+        is_qwen = any(k in model.lower() for k in qwen_models) if model else False
+        is_reasoning = is_qwen or gpt_oss or any(k in model.lower() for k in ("deepseek-r1", "o1", "o3", "reasoning", "thinking", "r1-distill")) if model else False
+
+        # اگر کاربر صراحتاً خواسته thinking روشن بماند
         if is_reasoning and os.getenv("OPENROUTER_INCLUDE_REASONING", "").strip().lower() in {"1", "true", "yes", "on"}:
             raw = os.getenv("OPENROUTER_REASONING_EFFORT", "").strip().lower() or os.getenv("OPENROUTER_LLM_REASONING_EFFORT", "").strip().lower()
             effort = "" if raw in {"", "default", "unset", "none"} else raw
@@ -151,6 +155,22 @@ def llm_request_body(max_tokens: int, job_logger: logging.Logger | None = None, 
             elif job_logger:
                 job_logger.info("LLM speed: provider=openrouter model=%s reasoning=included, max_tokens=%s", model or "?", max_tokens)
             return fields
+
+        if is_qwen:
+            # Qwen: با ۳ لایه خاموش می‌شود
+            fields["reasoning"] = {"exclude": True}
+            fields["chat_template_kwargs"] = {"enable_thinking": False}
+            fields["enable_thinking"] = False
+            if job_logger:
+                job_logger.info("LLM speed: provider=openrouter model=%s reasoning=DISABLED (Qwen enable_thinking=false + exclude), max_tokens=%s", model or "?", max_tokens)
+            return fields
+        if gpt_oss:
+            # gpt-oss: اگر exclude کنیم خالی برمی‌گرداند — فقط reasoning خالی نفرست، بگذار خودش تصمیم بگیرد
+            # و برای voice فقط max_tokens پایین نگه دار تا سریع باشد
+            if job_logger:
+                job_logger.info("LLM speed: provider=openrouter model=%s reasoning=default (gpt-oss, no exclude), max_tokens=%s", model or "?", max_tokens)
+            return fields
+
         if is_reasoning:
             fields["reasoning"] = {"exclude": True}
             fields["chat_template_kwargs"] = {"enable_thinking": False}
