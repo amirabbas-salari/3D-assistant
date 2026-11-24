@@ -1,12 +1,12 @@
 # از صفر — StreamCore + سام
-# اجرا: docker compose -f streamcore/docker-compose.yml up --build
+# اجرا از ریشه پروژه:
+#   docker compose -f streamcore/docker-compose.yml up --build
+# اگر Docker Desktop خاموشه، اول از Start Menu اجراش کن تا "Engine running" بشه
 
 services:
   streamcore-server:
     image: ghcr.io/streamcoreai/streamcore-server:latest
-    build:
-      context: https://github.com/streamcoreai/streamcore-server.git#main
-      dockerfile: Dockerfile
+    # از image مستقیم استفاده کن — build از URL روی Windows کار نمی‌کنه
     ports:
       - "8080:8080"
       - "3478:3478/udp"
@@ -24,7 +24,7 @@ services:
 
   streamcore-agent:
     build:
-      context: ../
+      context: ..
       dockerfile: infra/streamcore/Dockerfile.agent
     ports:
       - "8000:8000"
@@ -37,14 +37,6 @@ services:
     networks:
       - sam-net
     command: uvicorn sam_streamcore.server:app --host 0.0.0.0 --port 8000 --workers 2
-
-  # اختیاری: برای تست لوکال بدون API key
-  # vibevoice-asr:
-  #   image: vibevoice/asr:latest
-  #   ports: ["8200:8200"]
-  # vibevoice-tts:
-  #   image: vibevoice/tts:latest
-  #   ports: ["8300:8300"]
 
 networks:
   sam-net:
