@@ -12,6 +12,7 @@ import { fetchHealth, createSession, cleanupSessions } from '../api/client.js';
 import { errorMessage, messageTime } from '../lib/utils.js';
 import { formatLatency } from '../lib/latency.js';
 import { createLipSync } from '../lipsync.js';
+import { installLiveKitWsPatch } from '../lib/livekitWsPatch.js';
 
 export default function App() {
   const s = useAppState();
@@ -73,6 +74,8 @@ export default function App() {
   async function startSession() {
     if (s.phase !== 'idle' || s.startingRef.current) return;
     s.startingRef.current = true; s.setPhase('connecting'); addLog('info', 'درخواست ایجاد جلسه ارسال شد');
+    // Install Blob→ArrayBuffer/string patch BEFORE SDK creates WebSocket
+    installLiveKitWsPatch((lvl, msg, det) => addLog(lvl, msg, det));
     let room;
     try {
       const data = await createSession({});
@@ -129,18 +132,29 @@ export default function App() {
         addLog('warning', 'ترک از اتاق لغو شد', `${participant.identity} · ${track.kind}`);
       });
       room.on(RoomEvent.AudioPlaybackStatusChanged, () => { const blocked = !room.canPlaybackAudio; s.setAudioNeedsGesture(blocked); addLog(blocked ? 'warning' : 'info', blocked ? 'مرورگر پخش خودکار صدا را مسدود کرد' : 'پخش صدا فعال است'); });
-      room.on(RoomEvent.Disconnected, (reason) => addLog('warning', 'اتصال LiveKit قطع شد', String(reason || 'بدون جزئیات')));
-      // Diagnostic: log sanitized URL (no token) and SDK version before connect
-      try { const u = new URL(data.serverUrl); addLog('info', 'اتصال LiveKit', `url=${u.protocol}//${u.host}${u.pathname} sdk=${Room.version || 'unknown'}`); } catch {}
+      room.on(RoomEvent.Disconnected, (reason) => {
+        const code = typeof reason === 'number' ? `code=${reason}` : String(reason || 'بدون جزئیات');
+        addLog('warning', 'اتصال LiveKit قطع شد', code);
+      });
+      room.on(RoomEvent.SignalConnected, () => addLog('success', 'سیگنال LiveKit متصل شد'));
+      room.on(RoomEvent.Reconnecting, () => addLog('warning', 'در حال اتصال مجدد سیگنال…'));
+      room.on(RoomEvent.Reconnected, () => addLog('success', 'سیگنال مجدداً متصل شد'));
+      // Diagnostic: sanitized URL, binaryType, SDK version — never log token
+      try {
+        const u = new URL(data.serverUrl);
+        const isWorker = u.hostname.includes('workers.dev');
+        addLog('info', 'اتصال LiveKit', `url=${u.protocol}//${u.host}${u.pathname} worker=${isWorker ? 'yes' : 'direct'} sdk=${Room.version || 'unknown'} binaryType=arraybuffer`);
+      } catch {}
       try {
         await room.connect(data.serverUrl, data.token);
       } catch (connectErr) {
         const msg = connectErr instanceof Error ? connectErr.message : String(connectErr);
         const stack = connectErr instanceof Error ? (connectErr.stack || '') : '';
         const isBlobJson = msg.includes('[object Blob]') || msg.includes('Unexpected token');
-        if (isBlobJson) {
-          addLog('error', 'سیگنال LiveKit: پیام Blob به‌جای JSON/ArrayBuffer', `msg=${msg.slice(0, 300)} · hint=Worker binary passthrough broken or binaryType!=arraybuffer · stack=${stack.slice(0, 800)}`);
-        }
+        const hint = isBlobJson
+          ? 'Blob→[object Blob] JSON: Worker did not preserve binary or binaryType≠arraybuffer. Test direct URL wss://horno-avatar-jr68tfeq.livekit.cloud ; if direct works redeploy Worker.'
+          : `code=${connectErr?.code || '?'} status=${connectErr?.status || '?'}`;
+        addLog('error', 'سیگنال LiveKit: اتصال ناموفق', `msg=${msg.slice(0, 400)} · ${hint} · stack=${stack.slice(0, 800)}`);
         throw connectErr;
       }
       s.startingRef.current = false; s.setPhase('connected');
