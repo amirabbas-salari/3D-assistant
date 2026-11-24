@@ -5,10 +5,11 @@ SPEED_PROFILES: dict[str, dict] = {
     "balanced": {"preemptive_generation": {"preemptive_tts": True, "max_speech_duration": 20.0}},
     "fast": {"endpointing": {"min_delay": 0.2, "max_delay": 2.0}, "preemptive_generation": {"preemptive_tts": True, "max_speech_duration": 20.0}},
     "fastest": {"endpointing": {"min_delay": 0.15, "max_delay": 1.5}, "preemptive_generation": {"preemptive_tts": True, "max_speech_duration": 30.0}},
-    # ultra قبلاً 0.08 بود → خیلی تهاجمی، باعث قطع زودهنگام و transcript دیررس (35s outlier در لاگ 24 Nov) می‌شد
-    # افزایش به 0.25 تا STT کند (deepgram/fa) فرصت نهایی شدن داشته باشد — warning: transcript arrives after turn committed
-    "ultra": {"endpointing": {"min_delay": 0.25, "max_delay": 1.2}, "preemptive_generation": {"preemptive_tts": True, "max_speech_duration": 40.0}, "interruption": {"min_duration": 0.6, "false_interruption_timeout": 0.6}},
-    "instant": {"endpointing": {"min_delay": 0.12, "max_delay": 1.0}, "preemptive_generation": {"preemptive_tts": True, "max_speech_duration": 40.0}, "interruption": {"min_duration": 0.5, "false_interruption_timeout": 0.5}},
+    # ultra: تعادل دقت/سرعت برای فارسی — افزایش‌های قبلی برای حل transcript دیررس بود
+    # حالا با دقت بالاتر: min_delay کمتر برای واکنش سریع، ولی max_delay محدود برای جلوگیری از انتظار طولانی
+    # اگر STT کند بود و warning دیدی، AGENT_MIN_ENDPOINTING_DELAY=0.25 بگذار
+    "ultra": {"endpointing": {"min_delay": 0.15, "max_delay": 1.0}, "preemptive_generation": {"preemptive_tts": True, "max_speech_duration": 40.0}, "interruption": {"min_duration": 0.5, "false_interruption_timeout": 0.5}},
+    "instant": {"endpointing": {"min_delay": 0.08, "max_delay": 0.8}, "preemptive_generation": {"preemptive_tts": True, "max_speech_duration": 40.0}, "interruption": {"min_duration": 0.4, "false_interruption_timeout": 0.4}},
 }
 
 def speed_profile(job_logger: logging.Logger) -> dict:
