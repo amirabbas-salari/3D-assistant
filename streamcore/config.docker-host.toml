@@ -1,0 +1,42 @@
+# StreamCore — هیبرید ویندوز: agent لوکال (8000)، سرور داخل Docker (8080)
+# تفاوت: agent url به host.docker.internal اشاره می‌کنه چون localhost داخل کانتینر خودشه
+[server]
+port = "8080"
+public_ip = ""
+turn_secret = ""
+jwt_secret = ""
+api_key = ""
+session_grace_ms = 30000
+max_sessions = 0
+
+[stt]
+provider = "deepgram"
+[deepgram]
+api_key = "${DEEPGRAM_API_KEY}"
+model = "nova-3"
+language = "fa"
+
+[llm]
+provider = "agent"
+[agent]
+url = "http://host.docker.internal:8000/agent"
+api_key = ""
+timeout_ms = 30000
+
+[tts]
+provider = "cartesia"
+[cartesia]
+api_key = "${CARTESIA_API_KEY}"
+model = "sonic-3"
+language = "fa"
+voice = "fa-calm-male"
+
+[vad]
+provider = "silero"
+threshold = 0.5
+
+[plugins]
+directory = "./plugins"
+
+[display]
+enabled = false
