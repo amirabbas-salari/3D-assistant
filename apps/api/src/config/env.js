@@ -11,7 +11,10 @@ export function avatarProvider() {
   if (!avatarEnabled()) return 'none';
   const p = clean(process.env.AVATAR_PROVIDER ?? 'tavus').toLowerCase();
   if (['','none','off','false'].includes(p)) return 'none';
-  return 'tavus';
+  if (['spatius','spatius-avatar','spatius_avatar','avatar'].includes(p)) return 'spatius';
+  if (['tavus','tavus-cvi','cvi','daily','tavus-livekit','livekit','tavus_auto'].includes(p)) return 'tavus';
+  if (['did','d-id','heygen','hedra'].includes(p)) return p;
+  return p;
 }
 export function tavusAvatarMode() {
   const m = clean(process.env.TAVUS_AVATAR_MODE || process.env.TAVUS_MODE || 'livekit').toLowerCase();
@@ -101,6 +104,29 @@ export function tavusHints() {
   }
   return hints;
 }
+// ── Spatius helpers ─────────────────────────────────────────────────
+export function spatiusConfigured() {
+  return Boolean(clean(process.env.SPATIUS_API_KEY) && clean(process.env.SPATIUS_APP_ID) && clean(process.env.SPATIUS_AVATAR_ID));
+}
+export function spatiusHints() {
+  const hints = [];
+  if (!avatarEnabled() || avatarProvider() !== 'spatius') return hints;
+  if (!spatiusConfigured()) {
+    if (!clean(process.env.SPATIUS_API_KEY)) hints.push('SPATIUS_API_KEY تنظیم نشده — از https://app.spatius.ai/apps بگیرید');
+    if (!clean(process.env.SPATIUS_APP_ID)) hints.push('SPATIUS_APP_ID تنظیم نشده');
+    if (!clean(process.env.SPATIUS_AVATAR_ID)) hints.push('SPATIUS_AVATAR_ID تنظیم نشده — از https://app.spatius.ai/avatars/library انتخاب کنید');
+    return hints;
+  }
+  const fmt = clean(process.env.SPATIUS_AUDIO_FORMAT || 'pcm_s16le').toLowerCase();
+  const sr = clean(process.env.SPATIUS_SAMPLE_RATE || '24000');
+  if (fmt === 'ogg_opus' && !['8000','12000','16000','24000','48000'].includes(sr)) {
+    hints.push(`SPATIUS_AUDIO_FORMAT=ogg_opus فقط نرخ‌های 8000,12000,16000,24000,48000 را می‌پذیرد — شما ${sr} گذاشتید. pcm_s16le بگذارید یا نرخ را تغییر دهید`);
+  }
+  if (!clean(process.env.SPATIUS_REGION)) {
+    // auto is fine, no hint
+  }
+  return hints;
+}
 export function isConfigured() {
   const rawLlm = clean(process.env.LLM_PROVIDER ?? '').toLowerCase();
   const isLivekitLlm = ['livekit','inference','lk','livekit-inference','livekit_inference',''].includes(rawLlm);
@@ -114,5 +140,6 @@ export function isConfigured() {
   const provider = avatarProvider();
   if (provider === 'none') return true;
   if (provider === 'tavus') return tavusConfigured();
+  if (provider === 'spatius') return spatiusConfigured();
   return false;
 }
