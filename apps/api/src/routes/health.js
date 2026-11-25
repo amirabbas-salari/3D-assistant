@@ -1,19 +1,23 @@
 import { Router } from 'express';
-import { avatarEnabled, avatarProvider, tavusConfigured, speechProvider, sttProvider, ttsProvider, speechConfigured, cloudflareTtsConfigured, openrouterConfigured, llmProvider, isConfigured, livekitPublicUrl, livekitInternalUrl, isLocalLivekit } from '../config/env.js';
+import { avatarEnabled, avatarProvider, tavusConfigured, tavusLanguages, tavusGreeting, tavusContext, tavusHints, speechProvider, sttProvider, ttsProvider, speechConfigured, cloudflareTtsConfigured, openrouterConfigured, llmProvider, isConfigured, livekitPublicUrl, livekitInternalUrl, isLocalLivekit } from '../config/env.js';
 const router = Router();
 router.get('/health', (_req, res) => {
   const _llmProv = llmProvider();
   const local = isLocalLivekit();
-  const hint = local && _llmProv === 'livekit'
+  const tHints = tavusHints();
+  const hint = (local && _llmProv === 'livekit'
     ? 'هشدار: LiveKit لوکال Inference ندارد — LLM_PROVIDER را openrouter یا cloudflare بگذارید'
-    : null;
+    : tHints.length ? tHints.join(' | ') : null);
   res.json({
-    ok: true, configured: isConfigured(), hint,
+    ok: true, configured: isConfigured(), hint, tavusHints: tHints,
     agentName: process.env.LIVEKIT_AGENT_NAME || 'sam-voice-agent',
     assistantName: (process.env.ASSISTANT_NAME || 'سام').trim(),
     livekitUrl: livekitPublicUrl(),
     livekitInternalUrl: livekitInternalUrl(),
     livekitLocal: local,
+    tavusLanguages: tavusLanguages(),
+    tavusGreeting: tavusGreeting() ? tavusGreeting().slice(0,120) : null,
+    tavusContext: tavusContext() ? tavusContext().slice(0,200) : null,
     llmProvider: _llmProv === 'openrouter' ? 'OpenRouter' : _llmProv === 'livekit' ? 'LiveKit Inference' : 'Cloudflare Workers AI',
     llmModel: _llmProv === 'openrouter'
       ? (process.env.OPENROUTER_LLM_MODEL || process.env.LLM_MODEL || 'openai/gpt-4o-mini')
