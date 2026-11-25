@@ -764,7 +764,7 @@ async def entrypoint(ctx: agents.JobContext) -> None:
     av_provider = avatar_provider()
     if av_provider == "none":
         job_logger.info("Avatar disabled (AVATAR_ENABLED=%s, AVATAR_PROVIDER=%s); using direct audio",
-                        os.getenv("AVATAR_ENABLED", "false"), os.getenv("AVATAR_PROVIDER", "spatius"))
+                        os.getenv("AVATAR_ENABLED", "false"), os.getenv("AVATAR_PROVIDER", "tavus"))
     avatar = await start_avatar(av_provider, session, ctx.room, job_logger)
 
     # ── RAG objects ──

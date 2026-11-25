@@ -23,3 +23,18 @@ export async function cleanupSessions() {
   if (!res.ok) throw new Error([data.error, data.details].filter(Boolean).join('\n') || `HTTP ${res.status}`);
   return data;
 }
+export async function createTavusConversation(payload = {}) {
+  const res = await fetch('/api/tavus/conversation', {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify(payload),
+  });
+  const data = await res.json().catch(() => ({}));
+  if (!res.ok) throw new Error([data.error, data.details ? JSON.stringify(data.details) : ''].filter(Boolean).join('\n') || `HTTP ${res.status}`);
+  return data;
+}
+export async function endTavusConversation(conversationId) {
+  const res = await fetch(`/api/tavus/conversation/${encodeURIComponent(conversationId)}`, { method: 'DELETE' });
+  const data = await res.json().catch(() => ({}));
+  return data;
+}
