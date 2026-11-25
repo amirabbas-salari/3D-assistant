@@ -4,10 +4,9 @@ Legacy: `python agent.py` at repo root still works via root shim.
 Canonical: `python -m apps.agent.src.sam.agent` or `python -m sam.agent`
 Keep this file tiny; all logic lives in subpackages.
 """
-from .config.env import PROJECT_ROOT, flag, ensure_livekit_env
-ensure_livekit_env()
 from .session.entrypoint import entrypoint, server
 from .assistant.agent import PersianAssistant
+from .config.env import PROJECT_ROOT, flag
 from .config.speed import SPEED_PROFILES
 from .speech import speech_provider, build_stt, build_tts
 from .avatar import avatar_provider, start_avatar

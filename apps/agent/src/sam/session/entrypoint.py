@@ -520,21 +520,6 @@ async def entrypoint(ctx: agents.JobContext) -> None:
     if latency.enabled:
         job_logger.info("Latency instrumentation on: summary every %s turns", latency.report_interval or "∞")
 
-    # هشدار لوکال: LiveKit خود میزبان Inference ندارد
-    try:
-        from ..config.env import is_local_livekit as _is_local
-        if _is_local():
-            from ..config.llm import llm_provider as _lp
-            from ..speech.providers import speech_provider as _sp, tts_provider as _tp
-            _livekit_llm = _lp() == "livekit"
-            _inf_speech = _sp() == "inference" or _tp() == "inference"
-            if _livekit_llm or _inf_speech:
-                job_logger.warning("LiveKit لوکال تشخیص داده شد (%s) — LiveKit Inference در لوکال وجود ندارد! برای STT/TTS از SPEECH_PROVIDER=direct و برای LLM از LLM_PROVIDER=openrouter استفاده کنید", os.getenv("LIVEKIT_URL") or os.getenv("LIVEKIT_INTERNAL_URL") or "ws://localhost:7880")
-                if _livekit_llm:
-                    job_logger.warning("LLM_PROVIDER=livekit در لوکال کار نمی‌کند — به openrouter سوییچ کنید یا OPENROUTER_API_KEY بگذارید")
-    except Exception:
-        pass
-
     # ── LLM config (LiveKit/OpenRouter/Cloudflare) ──
     try:
         llm_prov, llm_model, llm_base_url = validate_llm_config(job_logger)

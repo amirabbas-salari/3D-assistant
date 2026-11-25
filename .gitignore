@@ -6,7 +6,6 @@ apps/web/dist
 .env
 .env.*
 !.env.example
-!.env.local.example
 .DS_Store
 .rag/
 *.bak

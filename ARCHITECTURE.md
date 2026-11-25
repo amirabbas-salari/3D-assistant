@@ -44,8 +44,7 @@ Monorepo استاندارد با مرز ماژولار تمیز، قابل نگ�
 │   ├── contracts/              # shared constants (stages, providers)
 │   └── config/                 # eslint, ruff presets
 ├── infra/
-│   ├── docker/                 # Dockerfiles + compose (cloud) + compose.local (لوکال)
-│   ├── livekit/                # livekit.yaml برای خود میزبان
+│   ├── docker/                 # Dockerfiles + compose
 │   └── ci/                     # (reserved)
 ├── knowledge/                  # RAG source (optional)
 ├── prompts/sales_playbook.md   # رفتار فروش (قابل ویرایش بدون کد)
@@ -61,7 +60,7 @@ Monorepo استاندارد با مرز ماژولار تمیز، قابل نگ�
 | اصل | پیاده‌سازی |
 |---|---|
 | **Monorepo + Workspaces** | `package.json` با `workspaces: [apps/web, apps/api, packages/*]`؛ هر app مستقل ولی `npm run dev` از ریشه هر دو را با `concurrently` اجرا می‌کند |
-| **src-layout Python** | `apps/agent/src/sam` + `pyproject.toml` با `package-dir={"": "src"}` |
+| **src-layout Python** | `apps/agent/src/sam` + `pyproject.toml` با `package-dir={"" : "src"}` |
 | **تفکیک deployable** | `apps/web` (استاتیک)، `apps/api` (Node)، `apps/agent` (Python worker) — هر کدام Dockerfile جدا |
 | **Module boundaries** | `config` فقط env/llm/speed؛ `speech` فقط STT/TTS؛ `avatar` فقط Tavus؛ `session` فقط entrypoint؛ بدون چرخه‌ی وابستگی |
 | **Facade pattern** | `apps/agent/src/sam/agent.py` فقط re-export؛ منطق داخل `session/entrypoint.py` |
@@ -77,7 +76,6 @@ RAG_PRELOAD=true: knowledge قبلِ LLM تزریق می‌شود (بدون roun
 
 ## اجرای محلی
 
-**Cloud:**
 ```bash
 npm install
 cp .env.example .env  # پر کن
@@ -86,12 +84,4 @@ npm run dev            # web + api
 python -m sam.agent start  # agent (ترمینال جدا)
 ```
 
-**لوکال (LiveKit خود میزبان):**
-```bash
-cp .env.local.example .env  # کلیدهای direct/openrouter را پر کن
-docker compose -f infra/docker/docker-compose.yml -f infra/docker/docker-compose.local.yml up --build
-# یا: make docker-local  (یا make livekit برای فقط LiveKit)
-```
-
-Production Cloud: `npm run build` → `NODE_ENV=production npm start` + `docker compose -f infra/docker/docker-compose.yml up`
-Production لوکال: `docker compose -f infra/docker/docker-compose.yml -f infra/docker/docker-compose.local.yml up --build`
+Production: `npm run build` → `NODE_ENV=production npm start` + `docker compose -f infra/docker/docker-compose.yml up`

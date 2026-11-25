@@ -13,12 +13,9 @@
 - Node.js 18+
 - Python 3.10+
 - حساب Tavus با API key و Replica/Persona ID (https://platform.tavus.io) — اختیاری اگر `AVATAR_ENABLED=false`
-- **حالت Cloud** (پیش‌فرض): پروژه‌ی LiveKit Cloud با Inference فعال و دسترسی به مدل‌های STT/TTS + Cloudflare یا OpenRouter برای LLM
-- **حالت لوکال** (جدید): Docker (برای LiveKit خود میزبان) + Deepgram/Google یا OpenRouter/ElevenLabs
+- پروژه‌ی LiveKit Cloud با Inference فعال و دسترسی به مدل‌های STT/TTS + Cloudflare یا OpenRouter برای LLM
 
-## راه‌اندازی — دو حالت
-
-### حالت ۱: Cloud (پیش‌فرض)
+## راه‌اندازی
 
 ```bash
 npm install
@@ -49,55 +46,16 @@ npm run build
 NODE_ENV=production npm start
 ```
 
-### حالت ۲: لوکال — LiveKit خود میزبان (بدون Cloud)
-
-LiveKit SFU را روی همین ماشین اجرا کنید. **توجه:** LiveKit لوکال Inference ندارد، پس STT/TTS/LLM باید با کلید مستقیم بروند.
-
-```bash
-# ۱) .env لوکال را بسازید
-cp .env.local.example .env
-# داخل .env کلیدها را پر کنید:
-#   OPENROUTER_API_KEY=sk-or-...
-#   DEEPGRAM_API_KEY=...
-#   GOOGLE_API_KEY=...
-
-# ۲) اجرای کامل با داکر (LiveKit + API + Web + Agent)
-docker compose -f infra/docker/docker-compose.yml -f infra/docker/docker-compose.local.yml up --build
-# مرورگر: http://localhost:3000
-# LiveKit: ws://localhost:7880 (devkey/secret)
-# API: http://localhost:3001/api/health
-```
-
-یا بدون داکر — سه ترمینال جدا:
-
-```bash
-# ترمینال ۱: LiveKit server (نیاز به Docker)
-docker compose -f infra/docker/docker-compose.yml -f infra/docker/docker-compose.local.yml up livekit
-# ترمینال ۲: API + Web
-npm run dev
-# ترمینال ۳: Agent
-python -m sam.agent dev
-```
-
-نکات لوکال:
-- `LIVEKIT_URL=ws://localhost:7880` با `devkey/secret` (پیش‌فرض `--dev` در docker-compose.local.yml)
-- وقتی از داکر استفاده می‌کنید، `LIVEKIT_PUBLIC_URL=ws://localhost:7880` برای مرورگر و `LIVEKIT_INTERNAL_URL=ws://livekit:7880` برای داخل شبکه داکر خودکار ست می‌شود — نیازی به تغییر دستی نیست.
-- بدون Docker Desktop، می‌توانید `livekit-server --dev` را مستقیم نصب و اجرا کنید: https://docs.livekit.io/home/self-hosting/local/
-- `/api/health` در حالت لوکال `livekitLocal: true` و اگر هنوز `LLM_PROVIDER=livekit` باشد `hint` هشدار می‌دهد.
-
 ## دستورات (کانonical)
 
 | کار | دستور |
 |---|---|
 | نصب | `npm install` + `pip install -e apps/agent` |
-| توسعه Cloud (web+api) | `npm run dev` |
-| توسعه لوکال (همه با داکر) | `docker compose -f infra/docker/docker-compose.yml -f infra/docker/docker-compose.local.yml up --build` |
-| توسعه لوکال (فقط LiveKit) | `docker compose -f infra/docker/docker-compose.yml -f infra/docker/docker-compose.local.yml up livekit` |
+| توسعه (web+api) | `npm run dev` |
 | ایجنت | `python -m sam.agent dev` |
 | بیلد | `npm run build` |
 | تولید | `NODE_ENV=production npm start` |
-| داکر Cloud | `docker compose -f infra/docker/docker-compose.yml up` |
-| داکر لوکال | `docker compose -f infra/docker/docker-compose.yml -f infra/docker/docker-compose.local.yml up` |
+| داکر | `docker compose -f infra/docker/docker-compose.yml up` |
 
 ## خطای `no agent entrypoint found`
 

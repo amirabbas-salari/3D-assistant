@@ -1,4 +1,4 @@
-.PHONY: dev build start agent web api check clean docker-local docker-local-down
+.PHONY: dev build start agent web api check clean
 
 dev:
 	npm run dev
@@ -17,17 +17,6 @@ web:
 
 api:
 	node apps/api/src/index.js
-
-# لوکال کامل (LiveKit + API + Web + Agent)
-docker-local:
-	docker compose -f infra/docker/docker-compose.yml -f infra/docker/docker-compose.local.yml up --build
-
-docker-local-down:
-	docker compose -f infra/docker/docker-compose.yml -f infra/docker/docker-compose.local.yml down
-
-# فقط LiveKit لوکال
-livekit:
-	docker compose -f infra/docker/docker-compose.yml -f infra/docker/docker-compose.local.yml up livekit
 
 check:
 	python scripts/check_env.py

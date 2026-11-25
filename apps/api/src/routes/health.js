@@ -1,20 +1,14 @@
 import { Router } from 'express';
-import { avatarEnabled, avatarProvider, tavusConfigured, tavusLanguages, tavusGreeting, tavusContext, tavusHints, speechProvider, sttProvider, ttsProvider, speechConfigured, cloudflareTtsConfigured, openrouterConfigured, llmProvider, isConfigured, livekitPublicUrl, livekitInternalUrl, isLocalLivekit } from '../config/env.js';
+import { avatarEnabled, avatarProvider, tavusConfigured, tavusLanguages, tavusGreeting, tavusContext, tavusHints, speechProvider, sttProvider, ttsProvider, speechConfigured, cloudflareTtsConfigured, openrouterConfigured, llmProvider, isConfigured } from '../config/env.js';
 const router = Router();
 router.get('/health', (_req, res) => {
   const _llmProv = llmProvider();
-  const local = isLocalLivekit();
   const tHints = tavusHints();
-  const hint = (local && _llmProv === 'livekit'
-    ? 'هشدار: LiveKit لوکال Inference ندارد — LLM_PROVIDER را openrouter یا cloudflare بگذارید'
-    : tHints.length ? tHints.join(' | ') : null);
   res.json({
-    ok: true, configured: isConfigured(), hint, tavusHints: tHints,
+    ok: true, configured: isConfigured(), hint: tHints.length ? tHints.join(' | ') : null, tavusHints: tHints,
     agentName: process.env.LIVEKIT_AGENT_NAME || 'sam-voice-agent',
     assistantName: (process.env.ASSISTANT_NAME || 'سام').trim(),
-    livekitUrl: livekitPublicUrl(),
-    livekitInternalUrl: livekitInternalUrl(),
-    livekitLocal: local,
+    livekitUrl: process.env.LIVEKIT_URL || null,
     tavusLanguages: tavusLanguages(),
     tavusGreeting: tavusGreeting() ? tavusGreeting().slice(0,120) : null,
     tavusContext: tavusContext() ? tavusContext().slice(0,200) : null,
@@ -34,7 +28,7 @@ router.get('/health', (_req, res) => {
     ttsProviderLegacy: ttsProvider() === 'direct' ? 'Google Gemini API' : 'LiveKit Inference',
     ttsModel: ttsProvider() === 'openrouter' ? (process.env.OPENROUTER_TTS_MODEL || 'elevenlabs/eleven-v3-conversational') : (process.env.LIVEKIT_TTS_MODEL || 'google/gemini-3.8-flash-lite-tts'),
     ttsVoice: ttsProvider() === 'openrouter' ? (process.env.OPENROUTER_TTS_VOICE || process.env.ELEVENLABS_VOICE_ID || 'george') : (process.env.LIVEKIT_TTS_VOICE || 'Charon'), ttsLanguage: process.env.LIVEKIT_TTS_LANGUAGE || 'fa',
-    livekitTtsConfigured: Boolean(livekitPublicUrl() && process.env.LIVEKIT_API_KEY && process.env.LIVEKIT_API_SECRET),
+    livekitTtsConfigured: Boolean(process.env.LIVEKIT_URL && process.env.LIVEKIT_API_KEY && process.env.LIVEKIT_API_SECRET),
     ragEnabled: /^(1|true|yes|on)$/i.test((process.env.RAG_ENABLED || '').trim()), ragDocsDir: process.env.RAG_DOCS_DIR || 'knowledge', ragTopK: Number(process.env.RAG_TOP_K || 3),
   });
 });
