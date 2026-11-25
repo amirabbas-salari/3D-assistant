@@ -50,7 +50,17 @@ export function useStreamCore(config) {
         onError: (e) => {
           const msg = e?.message || e?.toString?.() || "unknown error";
           const stack = e?.stack;
-          addLog("error", `error: ${msg}`, { message: msg, stack, raw: e });
+          const is401 = /401|missing or malformed Authorization/i.test(msg);
+          if (is401) {
+            addLog("error", `error: ${msg} — سرور WHIP توکن می‌خواد`, {
+              fix: "2 راه: 1) مطمئن شو streamcore/config.toml داری jwt_secret=\"\" و api_key=\"\" و بعد: docker compose -f streamcore/docker-compose.yml down && docker compose -f streamcore/docker-compose.yml up --build --force-recreate  2) یا اگر عامداً JWT روشنه، تو UI پایین Token را بذار یا VITE_WHIP_TOKEN را در .env بذار",
+              message: msg,
+              stack,
+              raw: e,
+            });
+          } else {
+            addLog("error", `error: ${msg}`, { message: msg, stack, raw: e });
+          }
         },
       });
     }
