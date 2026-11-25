@@ -77,7 +77,18 @@ export function useStreamCore(config) {
       await getClient().connect();
       addLog("info", `connect() resolved in ${Date.now() - t0Ref.current}ms`);
     } catch (e) {
-      addLog("error", `connect() failed: ${e?.message || e}`, { stack: e?.stack, raw: e });
+      const msg = e?.message || String(e);
+      const isRefused = /Failed to fetch|ERR_CONNECTION_REFUSED|NetworkError/i.test(msg);
+      if (isRefused) {
+        addLog("error", `connect() failed: سرور StreamCore روی ${config.whipUrl} در دسترس نیست — آیا روشنه؟`, {
+          hint: "باید هر دو روشن باشن: 1) uvicorn روی :8000  2) streamcore-server روی :8080  — تست: curl http://localhost:8000/health و curl http://localhost:8080/health",
+          whipUrl: config.whipUrl,
+          stack: e?.stack,
+          raw: e,
+        });
+      } else {
+        addLog("error", `connect() failed: ${msg}`, { stack: e?.stack, raw: e });
+      }
       throw e;
     }
   }, [config.whipUrl, getClient, addLog]);
