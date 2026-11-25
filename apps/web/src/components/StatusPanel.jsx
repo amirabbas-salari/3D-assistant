@@ -27,7 +27,19 @@ export default function StatusPanel({ health, latency, connected }) {
           <span style={{background:'#4527a0', color:'#fff', padding:'2px 6px', borderRadius:'4px', fontSize:'8px', fontWeight:700}}>Chroma</span>
         </div>
       )}
-      <p className="status-note">اطلاعات سلامت API فقط وجود تنظیمات سرور را بررسی می‌کند و اتصال واقعی Spatius یا مدل را تضمین نمی‌کند.</p>
+      {/* Tavus/Avatar health */}
+      {health && (
+        <div style={{ margin: '0 13px 10px', padding: '8px 10px', background: health.avatarEnabled ? (health.tavusConfigured ? '#f0fdf4' : '#fef2f2') : '#f8fafc', border: `1px solid ${health.avatarEnabled ? (health.tavusConfigured ? '#bbf7d0' : '#fecaca') : '#e2e8f0'}`, borderRadius: 8, fontSize: 10, lineHeight: 1.7 }}>
+          <div style={{ display: 'flex', gap: 6, flexWrap: 'wrap', alignItems: 'center' }}>
+            <span>آواتار:</span><strong style={{ color: health.avatarEnabled ? '#166534' : '#64748b' }}>{health.avatarEnabled ? `روشن · ${health.avatarProvider}` : 'خاموش (AVATAR_ENABLED=false)'}</strong>
+            {health.avatarEnabled && <span style={{ background: health.tavusConfigured ? '#16a34a' : '#dc2626', color: '#fff', padding: '1px 6px', borderRadius: 4, fontSize: 8, fontWeight: 700 }}>{health.tavusConfigured ? 'Tavus OK' : 'Tavus ناقص'}</span>}
+          </div>
+          {health.avatarEnabled && !health.tavusConfigured && <div style={{ color: '#991b1b', marginTop: 4 }}>TAVUS_API_KEY یا TAVUS_REPLICA_ID/TAVUS_PERSONA_ID تنظیم نشده — تصویر لود نمی‌شود</div>}
+          {health.avatarEnabled && health.tavusConfigured && <div style={{ color: '#166534', marginTop: 2 }}>replica: <code style={{ fontSize: 9 }}>{health.tavusReplicaId || '—'}</code> · persona: <code style={{ fontSize: 9 }}>{health.tavusPersonaId || '—'}</code></div>}
+          {health.tavusHints?.length > 0 && <div style={{ color: '#92400e', marginTop: 4, background: '#fffbeb', border: '1px solid #fde68a', borderRadius: 6, padding: '6px 8px' }}>{health.tavusHints.join(' | ')}</div>}
+        </div>
+      )}
+      <p className="status-note">اطلاعات سلامت API فقط وجود تنظیمات سرور را بررسی می‌کند و اتصال واقعی Tavus یا مدل را تضمین نمی‌کند. اگر تصویر Tavus لود نشد، لاگ مرورگر (F12) و گزارش‌های پایین صفحه را ببینید.</p>
       {latency && latency.last && (
         <div className="latency-block">
           <div className="latency-head"><span>زمان‌بندی آخرین نوبت</span><strong>{msLabel(latency.last.e2e_ms)}</strong></div>
