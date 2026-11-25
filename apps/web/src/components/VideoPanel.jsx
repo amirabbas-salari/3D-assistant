@@ -6,8 +6,6 @@ export default function VideoPanel({
   avatarProvider,
   avatarReady,
   connected,
-  avatarVideoRef,
-  avatarContainerRef,
   assistantAudioTracks,
   audioNeedsGesture,
   enableAudioPlayback,
@@ -27,35 +25,24 @@ export default function VideoPanel({
     );
   }
 
-  const isTavus = avatarProvider === 'tavus';
-
   return (
     <section className="panel video-panel">
-      <div className="panel-heading"><div><Video size={17} /><div><h2>تصویر آواتار</h2><small>{avatarReady ? (isTavus ? 'آواتار Tavus متصل است' : 'ویدیوی آواتار دریافت شد') : connected ? (isTavus ? (tavusStatus || 'در انتظار Tavus…') : 'در انتظار ویدیوی آواتار') : 'پس از اتصال نمایش داده می‌شود'}</small></div></div><span className={`video-state ${avatarReady ? 'ready' : ''}`}>{avatarReady ? 'آماده' : 'انتظار'}</span></div>
+      <div className="panel-heading"><div><Video size={17} /><div><h2>تصویر آواتار</h2><small>{avatarReady ? 'آواتار Tavus متصل است' : connected ? (tavusStatus || 'در انتظار Tavus…') : 'پس از اتصال نمایش داده می‌شود'}</small></div></div><span className={`video-state ${avatarReady ? 'ready' : ''}`}>{avatarReady ? 'آماده' : 'انتظار'}</span></div>
       <div className="video-stage">
-        {/* Tavus CVI — Daily iframe */}
-        {isTavus ? (
-          tavusUrl ? (
-            <iframe
-              src={tavusUrl}
-              title="Tavus Avatar"
-              allow="camera; microphone; autoplay; display-capture"
-              style={{ width: '100%', height: '100%', border: 0, borderRadius: 12 }}
-            />
-          ) : (
-            <div className="video-placeholder"><Video size={22} /><span>{connected ? 'در حال ساخت گفتگوی Tavus…' : 'نشستی فعال نیست'}</span></div>
-          )
+        {tavusUrl ? (
+          <iframe
+            src={tavusUrl}
+            title="Tavus Avatar"
+            allow="camera; microphone; autoplay; display-capture"
+            style={{ width: '100%', height: '100%', border: 0, borderRadius: 12 }}
+          />
         ) : (
-          <>
-            <video ref={avatarVideoRef} className={`avatar-video ${avatarReady ? 'video-visible' : ''}`} autoPlay playsInline />
-            <div ref={avatarContainerRef} className="spatius-avatar" />
-            {!avatarReady && <div className="video-placeholder"><Video size={22} /><span>{connected ? 'در انتظار آواتار…' : 'نشستی فعال نیست'}</span></div>}
-          </>
+          <div className="video-placeholder"><Video size={22} /><span>{connected ? 'در حال ساخت گفتگوی Tavus…' : 'نشستی فعال نیست'}</span></div>
         )}
         {audioNeedsGesture && <button className="audio-prompt" onClick={enableAudioPlayback}>برای شنیدن پاسخ، کلیک کنید</button>}
       </div>
       <div className="video-meta"><span><span className={`tiny-dot ${avatarReady ? 'green' : ''}`} />{avatarReady ? 'آواتار وصل است' : 'آواتار وصل نیست'}</span><span><Volume2 size={14} /> {assistantAudioTracks.length} ترک صوتی</span></div>
-      {isTavus && <div style={{ padding: '8px 12px', fontSize: 11, color: '#71717a' }}>Tavus CVI: replica + persona از .env می‌آید. برای تغییر replica/persona، <code>TAVUS_REPLICA_ID</code> / <code>TAVUS_PERSONA_ID</code> را عوض کنید.</div>}
+      <div style={{ padding: '8px 12px', fontSize: 11, color: '#71717a' }}>Tavus CVI: replica + persona از .env می‌آید. برای تغییر replica/persona، <code>TAVUS_REPLICA_ID</code> / <code>TAVUS_PERSONA_ID</code> را عوض کنید.</div>
     </section>
   );
 }

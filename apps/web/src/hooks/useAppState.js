@@ -18,21 +18,12 @@ export function useAppState() {
     return Number.isFinite(saved) && saved >= 0 && saved <= 600 ? saved : 120;
   });
   const roomRef = useRef(null);
-  const avatarContainerRef = useRef(null);
-  const avatarPlayerRef = useRef(null);
-  const avatarViewRef = useRef(null);
-  const motionWatchRef = useRef([]);
-  const lipSyncRef = useRef(null);
   const assistantAudioRefs = useRef([]);
-  const lipSyncOffsetRef = useRef(lipSyncOffset);
   const startingRef = useRef(false);
   const chatRef = useRef(null);
   const logRef = useRef(null);
-  const avatarVideoRef = useRef(null);
 
   useEffect(() => {
-    lipSyncOffsetRef.current = lipSyncOffset;
-    lipSyncRef.current?.configure({ offsetMs: lipSyncOffset });
     try { window.localStorage?.setItem('sam.lipSyncOffsetMs', String(lipSyncOffset)); } catch {}
   }, [lipSyncOffset]);
 
@@ -41,7 +32,6 @@ export function useAppState() {
     draft, setDraft, draftTranscript, setDraftTranscript, avatarReady, setAvatarReady,
     assistantAudioTracks, setAssistantAudioTracks, micEnabled, setMicEnabled,
     audioNeedsGesture, setAudioNeedsGesture, cleanupBusy, setCleanupBusy, latency, setLatency,
-    lipSyncOffset, setLipSyncOffset, roomRef, avatarContainerRef, avatarPlayerRef, avatarViewRef,
-    motionWatchRef, lipSyncRef, assistantAudioRefs, lipSyncOffsetRef, startingRef, chatRef, logRef, avatarVideoRef,
+    lipSyncOffset, setLipSyncOffset, roomRef, assistantAudioRefs, startingRef, chatRef, logRef,
   };
 }
