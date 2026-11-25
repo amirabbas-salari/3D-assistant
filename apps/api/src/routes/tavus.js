@@ -1,29 +1,27 @@
 import { Router } from 'express';
 
 const router = Router();
-
+function clean(v){ let s=String(v??'').trim(); if((s.startsWith('"')&&s.endsWith('"')&&s.length>=2)||(s.startsWith("'")&&s.endsWith("'")&&s.length>=2)) s=s.slice(1,-1).trim(); if((s.startsWith('"')||s.startsWith("'"))&&s.length>1&&!(s.endsWith('"')||s.endsWith("'"))) s=s.slice(1).trim(); return s; }
 function tavusEnv() {
-  const apiKey = (process.env.TAVUS_API_KEY || '').trim();
-  const replicaId = (process.env.TAVUS_REPLICA_ID || process.env.TAVUS_FACE_ID || '').trim();
-  const personaId = (process.env.TAVUS_PERSONA_ID || process.env.TAVUS_PAL_ID || '').trim();
-  const languagesRaw = (process.env.TAVUS_LANGUAGES || process.env.TAVUS_LANGUAGE || '').trim();
+  const apiKey = clean(process.env.TAVUS_API_KEY || '');
+  const replicaId = clean(process.env.TAVUS_REPLICA_ID || process.env.TAVUS_FACE_ID || '');
+  const personaId = clean(process.env.TAVUS_PERSONA_ID || process.env.TAVUS_PAL_ID || '');
+  const languagesRaw = clean(process.env.TAVUS_LANGUAGES || process.env.TAVUS_LANGUAGE || '');
   const languages = languagesRaw ? languagesRaw.split(/[,\\s]+/).map(s=>s.trim()).filter(Boolean) : null;
-  const greeting = (process.env.TAVUS_GREETING || process.env.TAVUS_CUSTOM_GREETING || process.env.TAVUS_CONVERSATION_GREETING || '').trim() || null;
-  const context = (process.env.TAVUS_CONTEXT || process.env.TAVUS_CONVERSATIONAL_CONTEXT || '').trim() || null;
+  const greeting = clean(process.env.TAVUS_GREETING || process.env.TAVUS_CUSTOM_GREETING || process.env.TAVUS_CONVERSATION_GREETING || '') || null;
+  const context = clean(process.env.TAVUS_CONTEXT || process.env.TAVUS_CONVERSATIONAL_CONTEXT || '') || null;
   let propertiesJson = null;
-  const propsRaw = (process.env.TAVUS_PROPERTIES || process.env.TAVUS_PROPERTIES_JSON || '').trim();
+  const propsRaw = clean(process.env.TAVUS_PROPERTIES || process.env.TAVUS_PROPERTIES_JSON || '');
   if (propsRaw) { try { propertiesJson = JSON.parse(propsRaw); } catch {} }
-  const callbackUrl = (process.env.TAVUS_CALLBACK_URL || '').trim() || null;
+  const callbackUrl = clean(process.env.TAVUS_CALLBACK_URL || '') || null;
   return { apiKey, replicaId, personaId, languages, greeting, context, propertiesJson, callbackUrl };
 }
 
-// POST /api/tavus/conversation — ساخت CVI conversation و برگرداندن Daily URL
 router.post('/tavus/conversation', async (req, res) => {
   const { apiKey, replicaId, personaId, languages, greeting, context, propertiesJson, callbackUrl } = tavusEnv();
   if (!apiKey) return res.status(503).json({ error: 'TAVUS_API_KEY در .env تنظیم نشده — از https://platform.tavus.io بگیرید و API را ری‌استارت کنید', hint: 'AVATAR_ENABLED=true و TAVUS_API_KEY و TAVUS_REPLICA_ID/TAVUS_PERSONA_ID را پر کنید' });
   if (!replicaId && !personaId) return res.status(503).json({ error: 'TAVUS_REPLICA_ID یا TAVUS_PERSONA_ID لازم است', hint: 'حداقل یکی از این‌ها را بگذارید — اگر persona شما default replica دارد فقط persona_id کافیست' });
 
-  // Tavus docs: replica_id + persona_id (face_id/pal_id aliases removed — they cause 400)
   const body = {
     replica_id: replicaId || undefined,
     persona_id: personaId || undefined,
@@ -56,7 +54,6 @@ router.post('/tavus/conversation', async (req, res) => {
   }
 
   try {
-    // log outgoing body for debugging (without api key)
     console.log('[tavus] POST /v2/conversations', JSON.stringify({ ...body, replica_id: replicaId ? replicaId.slice(0,4)+'…' : undefined, persona_id: personaId ? personaId.slice(0,4)+'…' : undefined }));
     const r = await fetch('https://tavusapi.com/v2/conversations', {
       method: 'POST',
@@ -75,12 +72,11 @@ router.post('/tavus/conversation', async (req, res) => {
       }
       return res.status(r.status).json({ error: msg, details: data, status: r.status });
     }
-    // Tavus returns snake_case
     if (!data.conversation_url) console.warn('[tavus] no conversation_url in response', data);
     res.json({
       conversationId: data.conversation_id,
       conversationUrl: data.conversation_url,
-      conversation_url: data.conversation_url, // alias for compatibility
+      conversation_url: data.conversation_url,
       status: data.status,
       replicaId: data.replica_id || data.face_id,
       personaId: data.persona_id || data.pal_id,
