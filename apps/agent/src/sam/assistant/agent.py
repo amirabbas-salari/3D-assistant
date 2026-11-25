@@ -4,7 +4,7 @@ import os
 
 from livekit.agents import Agent, llm
 
-from .prompt import assistant_name, sales_prompt
+from .prompt import assistant_name, sales_prompt, company_knowledge, company_system_prompt
 from ..config.env import flag
 
 _TRUE = {"1", "true", "yes", "on"}
@@ -35,22 +35,19 @@ def _last_user_message(ctx) -> tuple[int, str]:
 
 class PersianAssistant(Agent):
     def __init__(self, knowledge_tool=None, latency_tracker=None, rag=None) -> None:
-        # latency_tracker برای ثبت مرحله‌ای هر توکن (گانت چارت)
         self._latency_tracker = latency_tracker
-        # rag: RagPrefetcher (فقط وقتی حالت preload فعال است enabled=True دارد)
         self._rag = rag
-        # سقف سخت تاریخچه برای هر فراخوانی LLM؛ تریم اصلی (دسته‌ای و پایدار) در entrypoint انجام می‌شود،
-        # این فقط شبکهٔ اطمینان است و عمداً بزرگ‌تر از سقف تریم دسته‌ای است تا prefix پرامپت (cache) ثابت بماند.
         max_keep = _env_int("AGENT_MAX_HISTORY_ITEMS", 12)
         slack = _env_int("AGENT_HISTORY_TRIM_SLACK", 6)
         self._history_hard_cap = (max_keep + 2 * slack) if max_keep > 0 else 0
 
         fast_start = flag("AGENT_FAST_START", True)
         name = assistant_name()
+        # ── هسته هویت + لحن ──
         instructions = (
-            f"تو {name}، مشاور صوتیِ شرکتِ دیجیتال مارکتینگ و طراحی سایتِ ما هستی — صدای مرد، گرم، طبیعی و انسانی. حرف‌زدنت باید مثل یه مشاور باتجربه طبیعی باشه. کارت معرفیِ خدماتِ شرکته: طراحی سایت، سئو، تبلیغات، شبکه‌اجتماعی، برندینگ و تولید محتوا. مشتری رو آموزشِ رایگانِ کامل نده؛ جرقه بزن و نرم بکش سمت همکاری. "
+            f"تو {name}، مشاور و دستیار هوشمند پلتفرم Solution هستی — Solution یک پلتفرم B2B SaaS برای مدیریت، عرضه، فروش، رزرو، اجرا و پایش جایگاه‌های تبلیغاتی (Placement) در فضاهای فیزیکی و شبکه‌های تبلیغاتی است (مال و مجتمع تجاری، داروخانه، باشگاه، فروشگاه، مجموعه‌های خدماتی، فضاهای عمومی). صدای مرد، گرم، طبیعی و انسانی. کارت معرفی پلتفرم Solution و کمک به تبدیل ظرفیت تبلیغاتی فیزیکی به Inventory قابل مدیریت است — نه آموزش رایگان کامل؛ جرقه بزن و نرم بکش سمت همکاری. "
             f"نام تو {name} است؛ اگر کسی اسمت را پرسید همین را بگو. "
-            "هرگاه درباره‌ی جنسیت یا صدای خودت پرسیدند، بگو صدای مرد داری. خودت را مدام ماشین معرفی نکن و جمله‌هایی مثل «به عنوان AI» نگو، ولی اگر کاربر جدی و صادقانه پرسید انسانی یا هوش مصنوعی، راست بگو که دستیار صوتیِ هوشمندِ شرکت هستی و بعد ادامه بده. "
+            "هرگاه درباره‌ی جنسیت یا صدای خودت پرسیدند، بگو صدای مرد داری. خودت را مدام ماشین معرفی نکن و جمله‌هایی مثل «به عنوان AI» نگو، ولی اگر کاربر جدی و صادقانه پرسید انسانی یا هوش مصنوعی، راست بگو که دستیار صوتیِ هوشمندِ Solution هستی و بعد ادامه بده. "
             "خیلی کوتاه و طبیعی حرف بزن: هر جواب حداکثر ۱ تا ۲ جمله‌ی کوتاه (هر جمله ۶ تا ۱۲ کلمه) + ۱ سوال کوتاه (حداکثر ۷ کلمه)، جمعاً زیر ۳۵ کلمه. فارسیِ محاوره‌ایِ متعادل — یه چیزی بین رسمی و خودمونی، مثل یه مشاور حرفه‌ای که راحت و صمیمی صحبت می‌کنه. بگو «ببینید، خب، می‌دونید، آره، درسته، می‌شه، بذارید» — فعل‌ها نیمه‌شکسته و متعادل، نه خشکِ اداری («به استحضار می‌رسانم») و نه خیلی کوچه‌بازاری. با «شما» ولی راحت حرف بزن. لحنت مثل گفتگوی حضوری باشه، نه مقاله. هرگز لیست، پاراگراف بلند، یا توضیح اضافه نده مگر کاربر بگه «کامل توضیح بده». "
             "کاملاً طبیعی و متعادل صحبت کن — خشک و کتابی نباش: جمله‌هات رو با «حتما»، «سوال خوبیه»، «خوشحالم کمک کنم» شروع نکن. بگو «خیلی خوبه، متوجه‌ام، خب ببینید، دقیقاً، درسته». هر جواب یه ریتمِ متفاوت داشته باش. گاهی «...» یا «!» کافیه. احساس رو کوتاه و متعادل برگردون: ناراحته → «متوجه‌ام، حق دارید کلافه باشید» / ذوق داره → «به‌به! عالیه» / نگرانِ هزینه → «کاملاً درکتون می‌کنم، بذارید روراست بگم». "
             "آینه‌ی مشتری باش: خودمونی گفت («پیجم نمی‌گیره») → متعادل بگو «می‌دونم چی می‌گید، خیلی‌ها همین مشکل رو دارن»، تخصصی گفت (ROAS…) → هم‌سطح ولی راحت بگو. مأموریتت ترغیبه: فقط ۱ نکته‌ی طلاییِ کوتاه بگو، بعد بکش سمت «ما برات انجام می‌دیم». هر جواب با ۱ دعوتِ کوتاه و متعادل تموم شه: «بذارید یه نگاهی بندازیم؟» "
@@ -61,8 +58,6 @@ class PersianAssistant(Agent):
         if fast_start:
             instructions += (" فقط ۱ جمله‌ی کوتاه (۵ تا ۹ کلمه) که جواب اصلی توشه + ۱ سوال کوتاه (۳ تا ۷ کلمه). بیشتر از ۲ جمله نشو. مقدمه‌چینی، «حتما»، «سوال خوبیه» ممنوع. هر جمله یه فکر کامل باشه، نه تکه‌تکه.")
 
-        # Cloudflare Workers AI (gpt-oss-120b) با ابزار function-calling ناسازگار است و خطای 400
-        # "array not in string" می‌دهد. پس به صورت پیش‌فرض ابزار را خاموش می‌کنیم و از preload استفاده می‌کنیم.
         use_tool = False
         if knowledge_tool is not None:
             preload = _env_bool("RAG_PRELOAD", False)
@@ -73,24 +68,32 @@ class PersianAssistant(Agent):
             elif preload:
                 instructions += " پایگاه دانش قبلِ جواب به پرامپت اضافه شده؛ مستقیم با همان اطلاعات جواب بده، ابزار صدا نزن."
             else:
-                # حالت امن پیش‌فرض: بدون ابزار، RAG در llm_node تزریق می‌شود
                 instructions += " پایگاه دانش در صورت نیاز به پرامپت اضافه می‌شود؛ اگر اطلاعات مرتبط دیدی از همان استفاده کن وگرنه با دانش عمومی ادامه بده."
 
-        # بخش آنالیز سایت/پیج — همیشه تزریق می‌شود.
-        # عددها و نمونه‌ها: فقط واقعی (از پایگاه دانش/playbook)؛ قبلاً مثال‌های عددی ثابت داخل پرامپت بود
-        # و مدل آن‌ها را به‌عنوان نتیجهٔ واقعی مشتریان قبلی برای هر کسی تکرار می‌کرد.
+        # ── Knowledge Base جدید — Advertising Media & Placement Management Platform ──
+        system_prompt = company_system_prompt()
+        if system_prompt:
+            instructions += "\n\n[هویت سازمانی — Solution]\n" + system_prompt[:2500]
+
+        company_kb = company_knowledge()
+        if company_kb:
+            kb_compact = company_kb[:5000]
+            instructions += "\n\n[دانش محصول — Solution: Advertising Media & Placement Management Platform]\n" + kb_compact
+
         audit_core = (
-            "\n\n[آنالیز سایت/پیج — ۴ مرحله اجباری]\n"
-            "سایت ۷ چک: سرعت/CoreVitals (>۳s نصف می‌پره), موبایل/CTA, Hero/اعتماد(۵ثانیه), مسیرخرید ۱کلیکه, سئو intent+تکنیکال, کپی متقاعدکننده, SSL/نماد.\n"
-            "اینستا ۷ چک: بایو ۱۵۰کاراکتر+لینک هوشمند, هایلایت ۵تایی, گرید ۹پست ویترین, ریلز هوک۳ثانیه‌ای+کات۱.۵s, استوری روزانه تعاملی, کپشن CTA «کلمه X دایرکت کن», ادز ریتارگت.\n"
-            "مرحله۱: کاربر سایت/پیج خواست → فقط بپرس «چه محصول/خدمتی؟ کجا می‌فروشی؟ چی اذیتت می‌کنه؟» — جلسه نپرس.\n"
-            "مرحله۲: ۲-۳ ایرادِ محتمل بگو (معمولاً) + هر ایراد ۱ جمله + «ما برای مشتری‌های مشابه اینو حل کردیم» + پایان «کدوم پلتفرم برات مهم‌تره؟» یا «محصولت چیه؟» — باز هم جلسه نپرس. عدد و درصد نتیجه را فقط اگر در پایگاه دانش یا playbook هست بگو؛ هرگز عدد نساز.\n"
-            "مرحله۳: ۱ نکته عمیق‌تر + نمونهٔ مشابهِ واقعی (فقط اگر در پایگاه دانش هست) + اشارهٔ ملایم به محدودیت ظرفیت/زمان فقط اگر واقعاً صدق می‌کند.\n"
-            "مرحله۴: فقط اگر علاقه نشان داد (گفت «بگو»، «چطور»، اطلاعات داد) → «بررسی رایگان ۱۵ دقیقه‌ای برات بذارم؟ چه ساعتی؟» اگر گفت «جلسه نمی‌خوام» هرگز اصرار نکن.\n"
-            "قانون: ۲۰٪ چی/چرا، ۸۰٪ اجرا با ما — آموزش قدم‌به‌قدم نده.\n"
+            "\n\n[قوانین عملیاتی — الزامی]\\n"
+            "Solution = پلتفرم مدیریت چرخه عمر Media Inventory: Venue → Location → Placement → Contract → Campaign → Order → Payment → Activation → Monitoring → Report. لایه‌ها: Supply (مالکان فضا/شبکه‌ها)، Demand (برند/آژانس)، Operations (کمپین/قرارداد/سفارش/محتوا/پرداخت).\\n"
+            "Placement هسته Supply است؛ هر Placement شناسه یکتا، Lifecycle (Draft→Pending Verification→Active→Reserved→Contracted→Inactive→Archived)، و Contract دارد. Contract وضعیت Draft/Pending/Active/Expiring/Expired/Cancelled دارد.\\n"
+            "قوانین کلیدی که هرگز نقض نکن: BR-03: Placement بدون Contract معتبر را Active/Available معرفی نکن. BR-06: کاربر فقط داده با Scope مجاز ببیند. BR-07: تغییرات حساس (Contract/Payment/Permission/Placement Status) قابل Audit. BR-08: Campaign بدون شرایط لازم وارد Activation نشود.\\n"
+            "اطلاعات متغیر (قیمت، تعرفه، پکیج، ظرفیت خالی، موجودی، مدت هر نوبت، تعداد تکرار، مشخصات فنی دقیق، فهرست به‌روز نمایشگرها، ساعات فعالیت، شرایط لغو) را هرگز حدس نزن؛ بگو «باید از سامانه/تیم عملیاتی استعلام شود». داده واقعی بر تستی اولویت دارد.\\n"
+            "فلو گفتگو (۴ مرحله):\\n"
+            "۱) کاربر تبلیغ/جایگاه خواست → فقط بپرس «چه کسب‌وکاری؟ چه محصولی؟ کجا و برای چه کسانی؟» — جلسه نپرس.\\n"
+            "۲) ۲-۳ نکته محتمل (معمولاً) هر کدام ۱ جمله + «Solution اینو با Placement مناسب و Contract شفاف حل می‌کنه» + پایان «بودجه‌تون چقدره؟ یا کدوم شهر/مکان؟» — عدد نساز.\\n"
+            "۳) ۱ نکته عمیق‌تر (Inventory استاندارد، Source of Truth، اتصال Sales به Operations) + اشاره به مزیت (کنترل قرارداد، جلوگیری از فروش ظرفیت ناموجود) فقط اگر مرتبط بود.\\n"
+            "۴) فقط اگر علاقه نشان داد (گفت «بگو»، «چطور»، اطلاعات داد) → «بررسی رایگان ۱۵ دقیقه‌ای برات بذارم؟ چه ساعتی؟» اگر گفت «جلسه نمی‌خوام» اصرار نکن.\\n"
+            "۲۰٪ چی/چرا، ۸۰٪ اجرا با ما — آموزش قدم‌به‌قدم نده. وضعیت‌های State Machine را فقط نام ببر، نه به‌عنوان قابلیت قطعی اگر در دسترس نیست.\\n"
         )
 
-        # playbook فروش: به‌جای بریدن انتهای کل پرامپت (که audit_core را می‌خورد)، خود playbook را در بودجه جا بده
         selling_block = ""
         selling = sales_prompt()
         if selling:
@@ -108,7 +111,6 @@ class PersianAssistant(Agent):
 
         super().__init__(instructions=instructions, tools=[knowledge_tool] if (knowledge_tool and use_tool) else [])
 
-    # ── helpers ──
     def _track(self, method: str, *args) -> None:
         t = self._latency_tracker
         if t is None:
@@ -119,13 +121,6 @@ class PersianAssistant(Agent):
             pass
 
     async def _prepare_chat_ctx(self, chat_ctx):
-        """روی یک کپی کار می‌کند: سقف سخت تاریخچه + تزریق RAG درست قبل از آخرین پیام کاربر.
-
-        چرا اینجا و نه on_user_turn_completed؟ با preemptive generation (فعال در speed.py) تولید
-        پیش‌دستانه با chat_ctx فعلی شروع می‌شود و فقط وقتی دوباره استفاده می‌شود که hook چیزی را در
-        chat_ctx عوض نکرده باشد. تزریق RAG در hook آن را هر نوبت دور می‌ریخت (دو بار LLM/TTS).
-        تزریق در llm_node هم برای تولید پیش‌دستانه و هم برای تولید عادی و چت متنی یکسان کار می‌کند.
-        """
         rag = self._rag
         use_rag = rag is not None and getattr(rag, "enabled", False)
         cap = self._history_hard_cap
@@ -141,19 +136,17 @@ class PersianAssistant(Agent):
                 if knowledge:
                     content = f"دانش مرتبط (از پایگاه شرکت):\n{knowledge}"
                     try:
-                        # قبل از پیام کاربر: prefix تاریخچه برای prompt-cache ثابت می‌ماند
                         ctx.items.insert(idx, llm.ChatMessage(role="system", content=[content]))
                     except Exception:
                         ctx.add_message(role="system", content=content)
         return ctx
 
     async def llm_node(self, chat_ctx, tools, model_settings=None):
-        """حلقه LLM با ثبت مرحله‌ای هر توکن برای گانت چارت + RAG."""
         try:
             ctx = await self._prepare_chat_ctx(chat_ctx)
         except Exception:
             ctx = chat_ctx
-        self._track("on_llm_start")   # بعد از RAG؛ تا TTFT خالصِ LLM اندازه‌گیری شود
+        self._track("on_llm_start")
         try:
             stream = super().llm_node(ctx, tools, model_settings)
             if inspect.isawaitable(stream):
@@ -168,5 +161,4 @@ class PersianAssistant(Agent):
                     self._track("on_llm_token", text)
                 yield chunk
         finally:
-            # در cancel/interrupt هم state گانت بسته شود
             self._track("on_llm_end")
