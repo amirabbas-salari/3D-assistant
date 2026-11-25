@@ -152,7 +152,7 @@ export default function App() {
           </div>
           <aside className="right-column">
             <div className="audio-output" aria-hidden="true">{s.assistantAudioTracks.map((track) => <RemoteAudioOutput key={track.sid} track={track} registry={s.assistantAudioRefs} />)}</div>
-            <VideoPanel avatarEnabled={avatarEnabled} avatarProvider={avatarProvider} avatarReady={s.avatarReady} connected={connected} avatarVideoRef={s.avatarVideoRef} avatarContainerRef={s.avatarContainerRef} assistantAudioTracks={s.assistantAudioTracks} audioNeedsGesture={s.audioNeedsGesture} enableAudioPlayback={enableAudioPlayback} tavusUrl={tavusUrl} tavusStatus={tavusStatus} />
+            <VideoPanel avatarEnabled={avatarEnabled} avatarProvider={avatarProvider} avatarReady={s.avatarReady} connected={connected} assistantAudioTracks={s.assistantAudioTracks} audioNeedsGesture={s.audioNeedsGesture} enableAudioPlayback={enableAudioPlayback} tavusUrl={tavusUrl} tavusStatus={tavusStatus} />
             <ErrorBoundary>
               <StatusPanel health={s.health} latency={s.latency} connected={connected} />
             </ErrorBoundary>
