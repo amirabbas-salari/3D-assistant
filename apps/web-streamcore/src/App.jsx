@@ -2,11 +2,15 @@ import React, { useEffect, useRef, useState } from "react";
 import { useStreamCore } from "./hooks/useStreamCore.js";
 
 const WHIP_URL = import.meta.env.VITE_WHIP_URL || "http://localhost:8080/whip";
+const WHIP_TOKEN = import.meta.env.VITE_WHIP_TOKEN || import.meta.env.VITE_STREAMCORE_TOKEN || "";
 
 export default function App() {
+  const [token, setToken] = useState(WHIP_TOKEN);
+  const [showToken, setShowToken] = useState(false);
   const { status, transcript, remoteStream, isMuted, logs, connect, disconnect, toggleMute, clearLogs, copyLogs } =
     useStreamCore({
       whipUrl: WHIP_URL,
+      ...(token ? { token, apiKey: token } : {}),
     });
 
   const [autoScroll, setAutoScroll] = useState(true);
@@ -76,6 +80,25 @@ export default function App() {
               : "برای شروع وصل شو"}
           </span>
         </div>
+        <div style={{ padding: "0 16px 12px", display: "flex", gap: 8, alignItems: "center", justifyContent: "center" }}>
+          <input
+            placeholder="WHIP Token (اگر 401 می‌گیری)"
+            value={token}
+            onChange={(e) => setToken(e.target.value)}
+            style={{ flex: 1, maxWidth: 420, background: "#09090b", border: "1px solid #27272a", color: "#e4e4e7", borderRadius: 8, padding: "8px 10px", fontSize: 12 }}
+            dir="ltr"
+          />
+          <button className="btn btn-ghost btn-sm" onClick={() => setShowToken((v) => !v)} title="نمایش راهنما">
+            ?
+          </button>
+        </div>
+        {showToken && (
+          <div style={{ margin: "0 16px 12px", background: "#09090b", border: "1px solid #27272a", borderRadius: 8, padding: 10, fontSize: 11, color: "#a1a1aa", lineHeight: 1.6 }}>
+            اگر سرورت 401 میده: یا <code>streamcore/config.toml</code> رو بذار <code>jwt_secret=""</code> و <code>api_key=""</code> و ری‌استارت کن، یا توکن JWT/آپی‌کی رو اینجا بذار.
+            <br />
+            لوکال: خالی بذار. پروداکشن با JWT: توکن رو از بک‌اند بگیر و اینجا یا <code>VITE_WHIP_TOKEN</code> در <code>.env</code> بذار.
+          </div>
+        )}
 
         {canConnect && (
           <div className="controls">
