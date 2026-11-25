@@ -15,6 +15,13 @@ export default defineConfig({
     host: '0.0.0.0',
     allowedHosts: true,
     proxy: { '/api': 'http://127.0.0.1:3001' },
+    headers: {
+      'Cross-Origin-Embedder-Policy': 'require-corp',
+      'Cross-Origin-Opener-Policy': 'same-origin',
+    },
+  },
+  optimizeDeps: {
+    exclude: ['@spatius/avatarkit', '@spatius/avatarkit-rtc'],
   },
   build: {
     // In monorepo, output is apps/web/dist; apps/api also checks repo/dist for legacy

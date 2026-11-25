@@ -7,7 +7,14 @@ def avatar_provider() -> str:
     p = os.getenv("AVATAR_PROVIDER", "tavus").strip().lower()
     if p in {"", "none", "off", "false"}:
         return "none"
-    # فقط Tavus پشتیبانی می‌شود — did/spatius حذف شد
-    if p in {"tavus", "tavus-cvi", "cvi"}:
+    if p in {"spatius", "spatius-avatar", "spatius_avatar", "avatar"}:
+        return "spatius"
+    if p in {"tavus", "tavus-cvi", "cvi", "daily", "tavus-livekit", "livekit", "tavus_auto"}:
         return "tavus"
-    return "tavus"
+    # برای backward-compat
+    if p in {"did", "d-id", "heygen", "hedra"}:
+        return p
+    # اگر مقدار ناشناس بود، به همان مقدار برگردان تا isConfigured هشدار دهد
+    # ولی برای جلوگیری از کرش، tavus را fallback نکن — صریحاً خطا به کاربر نشان داده شود
+    # در عمل کاربر فقط tavus یا spatius می‌گذارد
+    return p

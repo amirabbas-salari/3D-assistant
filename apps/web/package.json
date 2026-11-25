@@ -10,6 +10,8 @@
     "typecheck": "tsc --noEmit || echo 'no tsconfig - skip'"
   },
   "dependencies": {
+    "@spatius/avatarkit": "^1.0.0",
+    "@spatius/avatarkit-rtc": "^1.0.0",
     "livekit-client": "^2.24.1",
     "lucide-react": "^0.468.0",
     "react": "^18.3.1",

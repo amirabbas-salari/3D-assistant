@@ -27,19 +27,25 @@ export default function StatusPanel({ health, latency, connected }) {
           <span style={{background:'#4527a0', color:'#fff', padding:'2px 6px', borderRadius:'4px', fontSize:'8px', fontWeight:700}}>Chroma</span>
         </div>
       )}
-      {/* Tavus/Avatar health */}
+      {/* Avatar health — Tavus / Spatius */}
       {health && (
-        <div style={{ margin: '0 13px 10px', padding: '8px 10px', background: health.avatarEnabled ? (health.tavusConfigured ? '#f0fdf4' : '#fef2f2') : '#f8fafc', border: `1px solid ${health.avatarEnabled ? (health.tavusConfigured ? '#bbf7d0' : '#fecaca') : '#e2e8f0'}`, borderRadius: 8, fontSize: 10, lineHeight: 1.7 }}>
+        <div style={{ margin: '0 13px 10px', padding: '8px 10px', background: health.avatarEnabled ? ((health.avatarProvider === 'tavus' ? health.tavusConfigured : health.avatarProvider === 'spatius' ? health.spatiusConfigured : false) ? '#f0fdf4' : '#fef2f2') : '#f8fafc', border: `1px solid ${health.avatarEnabled ? ((health.avatarProvider === 'tavus' ? health.tavusConfigured : health.avatarProvider === 'spatius' ? health.spatiusConfigured : false) ? '#bbf7d0' : '#fecaca') : '#e2e8f0'}`, borderRadius: 8, fontSize: 10, lineHeight: 1.7 }}>
           <div style={{ display: 'flex', gap: 6, flexWrap: 'wrap', alignItems: 'center' }}>
             <span>آواتار:</span><strong style={{ color: health.avatarEnabled ? '#166534' : '#64748b' }}>{health.avatarEnabled ? `روشن · ${health.avatarProvider}` : 'خاموش (AVATAR_ENABLED=false)'}</strong>
-            {health.avatarEnabled && <span style={{ background: health.tavusConfigured ? '#16a34a' : '#dc2626', color: '#fff', padding: '1px 6px', borderRadius: 4, fontSize: 8, fontWeight: 700 }}>{health.tavusConfigured ? 'Tavus OK' : 'Tavus ناقص'}</span>}
+            {health.avatarEnabled && health.avatarProvider === 'tavus' && <span style={{ background: health.tavusConfigured ? '#16a34a' : '#dc2626', color: '#fff', padding: '1px 6px', borderRadius: 4, fontSize: 8, fontWeight: 700 }}>{health.tavusConfigured ? 'Tavus OK' : 'Tavus ناقص'}</span>}
+            {health.avatarEnabled && health.avatarProvider === 'spatius' && <span style={{ background: health.spatiusConfigured ? '#0ea5e9' : '#dc2626', color: '#fff', padding: '1px 6px', borderRadius: 4, fontSize: 8, fontWeight: 700 }}>{health.spatiusConfigured ? 'Spatius OK' : 'Spatiaus ناقص'}</span>}
+            {health.avatarEnabled && !['tavus','spatius'].includes(health.avatarProvider) && <span style={{ background: '#f59e0b', color: '#fff', padding: '1px 6px', borderRadius: 4, fontSize: 8, fontWeight: 700 }}>ناشناس</span>}
           </div>
-          {health.avatarEnabled && !health.tavusConfigured && <div style={{ color: '#991b1b', marginTop: 4 }}>TAVUS_API_KEY یا TAVUS_REPLICA_ID/TAVUS_PERSONA_ID تنظیم نشده — تصویر لود نمی‌شود</div>}
-          {health.avatarEnabled && health.tavusConfigured && <div style={{ color: '#166534', marginTop: 2 }}>replica: <code style={{ fontSize: 9 }}>{health.tavusReplicaId || '—'}</code> · persona: <code style={{ fontSize: 9 }}>{health.tavusPersonaId || '—'}</code></div>}
+          {health.avatarEnabled && health.avatarProvider === 'tavus' && !health.tavusConfigured && <div style={{ color: '#991b1b', marginTop: 4 }}>TAVUS_API_KEY یا TAVUS_REPLICA_ID/TAVUS_PERSONA_ID تنظیم نشده — تصویر لود نمی‌شود</div>}
+          {health.avatarEnabled && health.avatarProvider === 'spatius' && !health.spatiusConfigured && <div style={{ color: '#991b1b', marginTop: 4 }}>SPATIUS_API_KEY / SPATIUS_APP_ID / SPATIUS_AVATAR_ID تنظیم نشده — تصویر لود نمی‌شود</div>}
+          {health.avatarEnabled && health.avatarProvider === 'tavus' && health.tavusConfigured && <div style={{ color: '#166534', marginTop: 2 }}>replica: <code style={{ fontSize: 9 }}>{health.tavusReplicaId || '—'}</code> · persona: <code style={{ fontSize: 9 }}>{health.tavusPersonaId || '—'}</code></div>}
+          {health.avatarEnabled && health.avatarProvider === 'spatius' && health.spatiusConfigured && <div style={{ color: '#0369a1', marginTop: 2 }}>app: <code style={{ fontSize: 9 }}>{health.spatiusAppId || '—'}</code> · avatar: <code style={{ fontSize: 9 }}>{health.spatiusAvatarId || '—'}</code> · region: {health.spatiusRegion}</div>}
           {health.tavusHints?.length > 0 && <div style={{ color: '#92400e', marginTop: 4, background: '#fffbeb', border: '1px solid #fde68a', borderRadius: 6, padding: '6px 8px' }}>{health.tavusHints.join(' | ')}</div>}
+          {health.spatiusHints?.length > 0 && <div style={{ color: '#92400e', marginTop: 4, background: '#fffbeb', border: '1px solid #fde68a', borderRadius: 6, padding: '6px 8px' }}>{health.spatiusHints.join(' | ')}</div>}
+          {health.hint && !health.tavusHints?.length && !health.spatiusHints?.length && <div style={{ color: '#92400e', marginTop: 4, background: '#fffbeb', border: '1px solid #fde68a', borderRadius: 6, padding: '6px 8px' }}>{health.hint}</div>}
         </div>
       )}
-      <p className="status-note">اطلاعات سلامت API فقط وجود تنظیمات سرور را بررسی می‌کند و اتصال واقعی Tavus یا مدل را تضمین نمی‌کند. اگر تصویر Tavus لود نشد، لاگ مرورگر (F12) و گزارش‌های پایین صفحه را ببینید.</p>
+      <p className="status-note">اطلاعات سلامت API فقط وجود تنظیمات سرور را بررسی می‌کند و اتصال واقعی Tavus/Spatiaus یا مدل را تضمین نمی‌کند. اگر تصویر لود نشد، لاگ مرورگر (F12) و گزارش‌های پایین صفحه را ببینید.</p>
       {latency && latency.last && (
         <div className="latency-block">
           <div className="latency-head"><span>زمان‌بندی آخرین نوبت</span><strong>{msLabel(latency.last.e2e_ms)}</strong></div>
