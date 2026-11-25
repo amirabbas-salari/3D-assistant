@@ -1,0 +1,52 @@
+# اجرای کامل لوکال — LiveKit خود میزبان + API + Web + Agent
+# استفاده:
+#   cp .env.example .env
+#   # در .env برای لوکال:
+#   #   LIVEKIT_URL=ws://localhost:7880
+#   #   LIVEKIT_API_KEY=devkey
+#   #   LIVEKIT_API_SECRET=secret
+#   #   LLM_PROVIDER=openrouter   (یا cloudflare)
+#   #   OPENROUTER_API_KEY=sk-...
+#   #   SPEECH_PROVIDER=direct    (نیاز به DEEPGRAM_API_KEY + GOOGLE_API_KEY)
+#   # اجرا:
+#   docker compose -f infra/docker/docker-compose.yml -f infra/docker/docker-compose.local.yml up --build
+#   # فقط LiveKit تنها:
+#   docker compose -f infra/docker/docker-compose.yml -f infra/docker/docker-compose.local.yml up livekit
+
+services:
+  livekit:
+    image: livekit/livekit-server:v1.8.4
+    command: --dev --bind 0.0.0.0
+    ports:
+      - "7880:7880"       # WebSocket + HTTP API
+      - "7881:7881"       # RTC TCP fallback
+      - "7882:7882/tcp"
+      - "7882:7882/udp"
+      - "50000-60000:50000-60000/udp"
+    environment:
+      LIVEKIT_KEYS: devkey: secret
+    volumes:
+      - ../livekit/livekit.yaml:/etc/livekit.yaml:ro
+    healthcheck:
+      test: ["CMD", "wget", "-qO-", "http://localhost:7880/"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+    restart: unless-stopped
+
+  api:
+    environment:
+      LIVEKIT_INTERNAL_URL: ws://livekit:7880
+      LIVEKIT_PUBLIC_URL: ws://localhost:7880
+    depends_on:
+      livekit:
+        condition: service_healthy
+
+  agent:
+    environment:
+      LIVEKIT_URL: ws://livekit:7880
+      LIVEKIT_API_KEY: devkey
+      LIVEKIT_API_SECRET: secret
+    depends_on:
+      livekit:
+        condition: service_healthy

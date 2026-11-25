@@ -1,5 +1,8 @@
 import { LiveKitAPI } from 'livekit-server-sdk';
+import { livekitInternalUrl, livekitPublicUrl, livekitApiKey, livekitApiSecret } from '../config/env.js';
 export function livekitAPI() {
-  const host = process.env.LIVEKIT_URL.replace(/^wss:\/\//, 'https://').replace(/^ws:\/\//, 'http://');
-  return new LiveKitAPI({ host, apiKey: process.env.LIVEKIT_API_KEY, secret: process.env.LIVEKIT_API_SECRET });
+  const url = livekitInternalUrl();
+  const host = url.replace(/^wss:\/\//, 'https://').replace(/^ws:\/\//, 'http://');
+  return new LiveKitAPI({ host, apiKey: livekitApiKey(), secret: livekitApiSecret() });
 }
+export { livekitPublicUrl, livekitInternalUrl };

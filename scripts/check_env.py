@@ -160,8 +160,21 @@ def check_values(values: dict[str, str]) -> list[str]:
     if not url.startswith(("wss://", "ws://", "https://", "http://")):
         print(f"  ⚠ LIVEKIT_URL باید با wss:// یا https:// شروع شود، نه {url[:24]!r}")
         problems.append("LIVEKIT_URL با طرح نادرست")
-    elif url.startswith("ws://") and "localhost" not in url and "127.0.0.1" not in url:
+    elif url.startswith("ws://") and "localhost" not in url and "127.0.0.1" not in url and "livekit:" not in url:
         print("  ⚠ برای سرور راه دور از wss:// استفاده کنید (ws:// رمزنگاری‌نشده است)")
+
+    # تشخیص لوکال — ws://localhost یا devkey
+    is_local = any(x in url for x in ("localhost", "127.0.0.1", "livekit:")) or url.startswith("ws://")
+    if is_local:
+        print("  ℹ️  LiveKit لوکال تشخیص داده شد — Inference در لوکال وجود ندارد؛ SPEECH_PROVIDER=direct و LLM_PROVIDER=openrouter/cloudflare بگذارید")
+        if values["LIVEKIT_API_KEY"].strip() == "devkey" and values["LIVEKIT_API_SECRET"].strip() == "secret":
+            print("  ✅ کلیدهای پیش‌فرض dev (--dev) — برای production عوض کنید")
+        speech = (values.get("SPEECH_PROVIDER") or values.get("TTS_PROVIDER") or "inference").strip().lower()
+        llm = (values.get("LLM_PROVIDER") or "").strip().lower()
+        if speech in {"inference", ""}:
+            print("  ⚠ لوکال با SPEECH_PROVIDER=inference کار نمی‌کند — بگذارید direct یا openrouter/elevenlabs")
+        if llm in {"livekit", "inference", "lk", ""} and not values.get("OPENROUTER_API_KEY", "").strip() and not (values.get("CLOUDFLARE_API_TOKEN", "").strip() and values.get("CLOUDFLARE_ACCOUNT_ID", "").strip()):
+            print("  ⚠ لوکال با LLM_PROVIDER=livekit کار نمی‌کند — بگذارید openrouter یا cloudflare")
 
     key, secret = values["LIVEKIT_API_KEY"].strip(), values["LIVEKIT_API_SECRET"].strip()
     if secret.startswith("API") and key.startswith("API"):
