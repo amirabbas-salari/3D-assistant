@@ -1,8 +1,6 @@
 function clean(v) {
   let s = String(v ?? '').trim();
-  // strip surrounding single/double quotes that user may leave (dotenv normally does, but broken lines keep them)
   if ((s.startsWith('"') && s.endsWith('"') && s.length >= 2) || (s.startsWith("'") && s.endsWith("'") && s.length >= 2)) s = s.slice(1, -1).trim();
-  // handle unterminated quote from user's file: leading " without trailing " -> drop leading "
   if ((s.startsWith('"') || s.startsWith("'")) && s.length > 1 && !(s.endsWith('"') || s.endsWith("'"))) s = s.slice(1).trim();
   return s;
 }
@@ -14,6 +12,11 @@ export function avatarProvider() {
   const p = clean(process.env.AVATAR_PROVIDER ?? 'tavus').toLowerCase();
   if (['','none','off','false'].includes(p)) return 'none';
   return 'tavus';
+}
+export function tavusAvatarMode() {
+  const m = clean(process.env.TAVUS_AVATAR_MODE || process.env.TAVUS_MODE || 'livekit').toLowerCase();
+  if (['cvi','daily','iframe'].includes(m)) return 'cvi';
+  return 'livekit'; // livekit = lip-sync to project's TTS (recommended)
 }
 export function speechProvider() {
   const p = clean(process.env.SPEECH_PROVIDER ?? 'inference').toLowerCase();
@@ -84,9 +87,12 @@ export function tavusHints() {
     hints.push('TAVUS_API_KEY یا TAVUS_REPLICA_ID/TAVUS_PERSONA_ID تنظیم نشده');
     return hints;
   }
+  const mode = tavusAvatarMode();
+  if (mode === 'cvi') hints.push('حالت CVI/Daily فعال است — آواتار مستقل کار می‌کند (LLM/TTS خودش). برای لب‌زدن به TTS پروژه، TAVUS_AVATAR_MODE=livekit بگذارید');
   const langs = tavusLanguages();
   if (!langs) {
-    hints.push('TAVUS_LANGUAGES تنظیم نشده — اگر Persona در داشبورد انگلیسی باشد، آواتار انگلیسی صحبت می‌کند. برای فارسی: TAVUS_LANGUAGES=fa یا Persona را در maker.tavus.io فارسی کنید (system_prompt + languages)');
+    // livekit mode: زبان از LiveKit TTS می‌آید، hint کمتر مهم
+    if (mode === 'cvi') hints.push('TAVUS_LANGUAGES تنظیم نشده — اگر Persona در داشبورد انگلیسی باشد، آواتار انگلیسی صحبت می‌کند. برای فارسی: TAVUS_LANGUAGES=fa یا Persona را در maker.tavus.io فارسی کنید (system_prompt + languages)');
   } else if (!langs.some(l=>['fa','fa-ir','persian','ar','ur'].includes(l.toLowerCase()))) {
     hints.push(`TAVUS_LANGUAGES=${langs.join(',')} — اولین زبان، زبان شروع است. برای فارسی fa بگذارید`);
   }

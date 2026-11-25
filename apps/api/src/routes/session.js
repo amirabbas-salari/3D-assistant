@@ -1,7 +1,7 @@
 import { Router } from 'express';
 import { randomUUID } from 'node:crypto';
 import { AccessToken } from 'livekit-server-sdk';
-import { avatarProvider, isConfigured, speechConfigured } from '../config/env.js';
+import { avatarProvider, tavusAvatarMode, isConfigured, speechConfigured } from '../config/env.js';
 import { livekitAPI } from '../lib/livekit.js';
 const router = Router();
 router.post('/session', async (req, res) => {
@@ -22,7 +22,7 @@ router.post('/session', async (req, res) => {
     await api.agentDispatch.createDispatch(roomName, process.env.LIVEKIT_AGENT_NAME || 'sam-voice-agent', { metadata: JSON.stringify({ opening_line: openingLine, participant_name: name }) });
     const accessToken = new AccessToken(process.env.LIVEKIT_API_KEY, process.env.LIVEKIT_API_SECRET, { identity, name, ttl: '10m' });
     accessToken.addGrant({ roomJoin: true, room: roomName, canPublish: true, canSubscribe: true, canPublishData: true });
-    res.json({ serverUrl: process.env.LIVEKIT_URL, token: await accessToken.toJwt(), roomName, avatarProvider: avatarProvider(), tavusReplicaId: process.env.TAVUS_REPLICA_ID || null, tavusPersonaId: process.env.TAVUS_PERSONA_ID || null });
+    res.json({ serverUrl: process.env.LIVEKIT_URL, token: await accessToken.toJwt(), roomName, avatarProvider: avatarProvider(), tavusAvatarMode: tavusAvatarMode(), tavusReplicaId: process.env.TAVUS_REPLICA_ID || process.env.TAVUS_FACE_ID || null, tavusPersonaId: process.env.TAVUS_PERSONA_ID || process.env.TAVUS_PAL_ID || null });
   } catch (error) {
     console.error('Could not start LiveKit session:', error);
     res.status(502).json({ error: 'ساخت جلسه‌ی صوتی/تصویری ناموفق بود. تنظیمات LiveKit، Agent و Tavus را بررسی کنید.', details: process.env.NODE_ENV === 'production' ? undefined : (error instanceof Error ? error.message : String(error)) });

@@ -13,7 +13,25 @@ export default function VideoPanel({
   tavusError,
   health,
   onRetryTavus,
+  // LiveKit avatar mode (لب‌زدن به TTS پروژه)
+  avatarVideoTrack,
+  avatarVideoRef,
 }) {
+  const avatarMode = health?.tavusAvatarMode || 'livekit'; // livekit = lip-sync to project TTS
+  const isLivekitMode = avatarMode === 'livekit';
+
+  // attach LiveKit video track to <video> element
+  React.useEffect(() => {
+    const el = avatarVideoRef?.current;
+    if (!el) return;
+    if (avatarVideoTrack) {
+      avatarVideoTrack.attach(el);
+      return () => { try { avatarVideoTrack.detach(el); } catch {} };
+    } else {
+      el.srcObject = null;
+    }
+  }, [avatarVideoTrack, avatarVideoRef]);
+
   if (!avatarEnabled) {
     const hints = health?.tavusHints || (health?.hint ? [health.hint] : []);
     const hintText = hints.join(' | ');
@@ -37,22 +55,43 @@ export default function VideoPanel({
   }
 
   const hasError = Boolean(tavusError);
-  const isLoading = connected && !tavusUrl && !hasError;
 
+  // ── LiveKit mode: آواتار از TTS پروژه لب می‌زند (video track از LiveKit) ──
+  if (isLivekitMode) {
+    return (
+      <section className="panel video-panel">
+        <div className="panel-heading"><div><Video size={17} /><div><h2>تصویر آواتار</h2><small>{avatarReady ? 'آواتار Tavus متصل است (لب‌سینک به TTS پروژه)' : hasError ? 'خطا در اتصال Tavus' : connected ? (tavusStatus || 'در انتظار ویدیوی آواتار…') : 'پس از اتصال نمایش داده می‌شود'}</small></div></div><span className={`video-state ${avatarReady ? 'ready' : hasError ? 'error' : ''}`} style={hasError ? { color: '#b33838', borderColor: '#e6c1c1', background: '#fef2f2' } : undefined}>{avatarReady ? 'آماده' : hasError ? 'خطا' : 'انتظار'}</span></div>
+        <div className="video-stage">
+          <video ref={avatarVideoRef} autoPlay playsInline muted={false} className={`avatar-video ${avatarReady ? 'video-visible' : ''}`} style={{ position: 'absolute', inset: 0, width: '100%', height: '100%', objectFit: 'cover', opacity: avatarReady ? 1 : 0 }} />
+          {!avatarReady && (
+            hasError ? (
+              <div style={{ position: 'absolute', inset: 0, display: 'flex', flexDirection: 'column', alignItems: 'center', justifyContent: 'center', gap: 10, padding: 16, background: '#1a2332', color: '#e2e8f0', textAlign: 'center' }}>
+                <AlertTriangle size={22} color="#f87171" />
+                <strong style={{ fontSize: 12, color: '#fecaca' }}>تصویر Tavus لود نشد</strong>
+                <span style={{ fontSize: 11, lineHeight: 1.7, maxWidth: 280, opacity: 0.9, wordBreak: 'break-word' }}>{tavusError}</span>
+                {onRetryTavus && <button className="secondary-button" onClick={onRetryTavus} style={{ background: '#fff', color: '#1e293b' }}><RefreshCw size={12} /> تلاش مجدد</button>}
+              </div>
+            ) : (
+              <div className="video-placeholder"><Video size={22} /><span>{connected ? 'در انتظار ویدیوی آواتار… (Agent و Tavus در حال اتصال)' : 'نشستی فعال نیست'}</span></div>
+            )
+          )}
+          {audioNeedsGesture && <button className="audio-prompt" onClick={enableAudioPlayback}>برای شنیدن پاسخ، کلیک کنید</button>}
+        </div>
+        <div className="video-meta"><span><span className={`tiny-dot ${avatarReady ? 'green' : hasError ? 'red' : ''}`} style={hasError ? { background: '#ef4444' } : undefined} />{avatarReady ? 'آواتار وصل است — لب‌سینک به TTS پروژه' : hasError ? 'خطا — لاگ را ببینید' : 'آواتار وصل نیست'}</span><span><Volume2 size={14} /> {assistantAudioTracks.length} ترک صوتی</span></div>
+        <div style={{ padding: '8px 12px', fontSize: 10, color: '#71717a', lineHeight: 1.7, borderTop: '1px solid #f1f5f9' }}>
+          حالت <code>livekit</code> — صدای TTS پروژه (OpenRouter/Google) به Tavus stream می‌شود و آواتار لب می‌زند. اگر تصویر نیامد، لاگ Agent را ببینید. برای حالت مستقل CVI: <code>TAVUS_AVATAR_MODE=cvi</code>
+        </div>
+      </section>
+    );
+  }
+
+  // ── CVI mode: Daily iframe مستقل ──
   return (
     <section className="panel video-panel">
       <div className="panel-heading"><div><Video size={17} /><div><h2>تصویر آواتار</h2><small>{avatarReady ? 'آواتار Tavus متصل است' : hasError ? 'خطا در اتصال Tavus' : connected ? (tavusStatus || 'در انتظار Tavus…') : 'پس از اتصال نمایش داده می‌شود'}</small></div></div><span className={`video-state ${avatarReady ? 'ready' : hasError ? 'error' : ''}`} style={hasError ? { color: '#b33838', borderColor: '#e6c1c1', background: '#fef2f2' } : undefined}>{avatarReady ? 'آماده' : hasError ? 'خطا' : 'انتظار'}</span></div>
       <div className="video-stage">
         {tavusUrl ? (
-          <iframe
-            src={tavusUrl}
-            title="Tavus Avatar"
-            allow="camera; microphone; autoplay; display-capture; fullscreen"
-            allowFullScreen
-            style={{ width: '100%', height: '100%', border: 0, borderRadius: 12, display: 'block' }}
-            onLoad={() => console.log('[tavus] iframe loaded', tavusUrl)}
-            onError={(e) => console.error('[tavus] iframe error', e)}
-          />
+          <iframe src={tavusUrl} title="Tavus Avatar" allow="camera; microphone; autoplay; display-capture; fullscreen" allowFullScreen style={{ width: '100%', height: '100%', border: 0, borderRadius: 12, display: 'block' }} onLoad={() => console.log('[tavus] iframe loaded', tavusUrl)} onError={(e) => console.error('[tavus] iframe error', e)} />
         ) : hasError ? (
           <div style={{ position: 'absolute', inset: 0, display: 'flex', flexDirection: 'column', alignItems: 'center', justifyContent: 'center', gap: 10, padding: 16, background: '#1a2332', color: '#e2e8f0', textAlign: 'center' }}>
             <AlertTriangle size={22} color="#f87171" />
@@ -70,13 +109,8 @@ export default function VideoPanel({
         {audioNeedsGesture && <button className="audio-prompt" onClick={enableAudioPlayback}>برای شنیدن پاسخ، کلیک کنید</button>}
       </div>
       <div className="video-meta"><span><span className={`tiny-dot ${avatarReady ? 'green' : hasError ? 'red' : ''}`} style={hasError ? { background: '#ef4444' } : undefined} />{avatarReady ? 'آواتار وصل است' : hasError ? 'خطا — لاگ را ببینید' : 'آواتار وصل نیست'}</span><span><Volume2 size={14} /> {assistantAudioTracks.length} ترک صوتی</span></div>
-      {hasError && health && !health.tavusConfigured && (
-        <div style={{ padding: '8px 12px', fontSize: 11, color: '#991b1b', background: '#fef2f2', borderTop: '1px solid #fecaca', lineHeight: 1.7 }}>
-          ⚠️ <code>TAVUS_API_KEY</code> یا <code>TAVUS_REPLICA_ID/TAVUS_PERSONA_ID</code> تنظیم نشده — <code>/api/health</code> مقدار <code>tavusConfigured: false</code> برمی‌گرداند
-        </div>
-      )}
       <div style={{ padding: '8px 12px', fontSize: 10, color: '#71717a', lineHeight: 1.7, borderTop: '1px solid #f1f5f9' }}>
-        Tavus CVI — Daily iframe. اگر تصویر سیاه ماند: ۱) اجازه‌ی دوربین/میکروفون مرورگر را بدهید ۲) <code>TAVUS_API_KEY</code> را از platform.tavus.io چک کنید ۳) لاگ شبکه (F12) خطای 503/401 را نشان می‌دهد — آن را در گزارش‌ها ببینید.
+        حالت CVI — Daily iframe مستقل. برای لب‌زدن به TTS پروژه: <code>TAVUS_AVATAR_MODE=livekit</code>
       </div>
     </section>
   );
