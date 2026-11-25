@@ -20,6 +20,7 @@ export default function App() {
   const [tavusUrl, setTavusUrl] = React.useState(null);
   const [tavusStatus, setTavusStatus] = React.useState('');
   const [tavusConversationId, setTavusConversationId] = React.useState(null);
+  const [tavusError, setTavusError] = React.useState('');
 
   function addLog(level, message, details = '') {
     s.setLogs((cur) => [...cur.slice(-(MAX_LOG_ENTRIES - 1)), { id: `${Date.now()}-${Math.random()}`, time: messageTime(), level: String(level || 'info').toLowerCase(), message: String(message || ''), details: details ? String(details) : '' }]);
@@ -29,9 +30,11 @@ export default function App() {
     s.setChatMessages((cur) => [...cur.slice(-(MAX_CHAT_MESSAGES - 1)), { id: `${Date.now()}-${Math.random()}`, role, text: String(text), source, time: messageTime() }]);
   }
 
-  React.useEffect(() => {
+  // fetch health on mount + refresh after session start
+  const refreshHealth = React.useCallback(() => {
     fetchHealth().then((data) => { s.setHealth(data); addLog(data.configured ? 'info' : 'warning', 'بررسی پیکربندی API انجام شد', JSON.stringify(data, null, 2)); }).catch((e) => { s.setHealth({ configured: false }); addLog('error', 'دسترسی به API ناموفق بود', errorMessage(e)); });
   }, []);
+  React.useEffect(() => { refreshHealth(); }, []);
   React.useEffect(() => {
     const onErr = (e) => addLog('error', 'خطای اجرا در مرورگر', e.message || 'خطای JavaScript');
     const onRej = (e) => addLog('error', 'وعده‌ی ناموفق در مرورگر', errorMessage(e.reason));
@@ -41,35 +44,45 @@ export default function App() {
   React.useEffect(() => { if (s.chatRef.current) s.chatRef.current.scrollTop = s.chatRef.current.scrollHeight; }, [s.chatMessages, s.draftTranscript]);
   React.useEffect(() => { if (s.logRef.current) s.logRef.current.scrollTop = s.logRef.current.scrollHeight; }, [s.logs]);
 
+  function doCreateTavus(roomName) {
+    setTavusError('');
+    setTavusStatus('در حال اتصال به Tavus…');
+    createTavusConversation({ conversation_name: `sam-${roomName || Date.now()}` })
+      .then((t) => {
+        const url = t.conversationUrl || t.conversation_url;
+        if (!url) throw new Error('Tavus conversation_url خالی برگشت — پاسخ: ' + JSON.stringify(t));
+        setTavusUrl(url);
+        setTavusConversationId(t.conversationId || t.conversation_id);
+        setTavusStatus('متصل');
+        s.setAvatarReady(true);
+        addLog('success', 'Tavus conversation ساخته شد', `url=${url} id=${t.conversationId || t.conversation_id}`);
+      })
+      .catch((e) => {
+        const msg = errorMessage(e);
+        setTavusStatus('خطا');
+        setTavusError(msg);
+        addLog('error', 'ساخت Tavus conversation ناموفق بود', msg + '\n\nعلت‌های رایج:\n• TAVUS_API_KEY اشتباه یا خالی (.env)\n• TAVUS_REPLICA_ID / TAVUS_PERSONA_ID اشتباه — از platform.tavus.io کپی کنید\n• AVATAR_ENABLED هنوز false است — باید true شود و API ری‌استارت شود\n• Tavus حساب شما محدود شده (401/403) — داشبورد را چک کنید');
+      });
+  }
+
   async function startSession() {
     if (s.phase !== 'idle' || s.startingRef.current) return;
     s.startingRef.current = true; s.setPhase('connecting'); addLog('info', 'درخواست ایجاد جلسه ارسال شد');
+    setTavusError(''); setTavusUrl(null); setTavusConversationId(null); setTavusStatus('');
     let room;
     try {
       const [data, livekit] = await Promise.all([createSession({}), import('livekit-client')]);
       const { Room, RoomEvent, Track } = livekit;
       const provider = data.avatarProvider === 'tavus' ? 'tavus' : 'none';
-      // tavus uses Daily iframe, no need for adaptiveStream trick
       room = new Room({ adaptiveStream: false, dynacast: true });
       s.roomRef.current = room;
       if (provider === 'none') addLog('info', 'آواتار خاموش است', 'AVATAR_ENABLED=false · فقط صدا و متن فعال است');
       else if (provider === 'tavus') {
         addLog('info', 'آواتار Tavus فعال است', `replica=${data.tavusReplicaId || 'env'} persona=${data.tavusPersonaId || 'env'} — در حال ساخت conversation...`);
-        // create Tavus CVI conversation in parallel (render_only: صدا از LiveKit می‌آید، تصویر از Tavus Daily)
-        setTavusStatus('در حال اتصال به Tavus…');
-        createTavusConversation({ conversation_name: `sam-${data.roomName || Date.now()}` })
-          .then((t) => {
-            setTavusUrl(t.conversationUrl);
-            setTavusConversationId(t.conversationId);
-            setTavusStatus('متصل');
-            s.setAvatarReady(true);
-            addLog('success', 'Tavus conversation ساخته شد', `url=${t.conversationUrl} id=${t.conversationId}`);
-          })
-          .catch((e) => {
-            setTavusStatus('خطا');
-            addLog('error', 'ساخت Tavus conversation ناموفق بود', errorMessage(e));
-          });
+        doCreateTavus(data.roomName);
       }
+      // refresh health to show current tavusConfigured state
+      refreshHealth();
 
       room.on(RoomEvent.DataReceived, (payload) => {
         try {
@@ -84,7 +97,7 @@ export default function App() {
       room.on(RoomEvent.ParticipantDisconnected, (p) => addLog('warning', 'شرکت‌کننده از اتاق خارج شد', p.identity));
       room.on(RoomEvent.TrackSubscribed, (track, publication, participant) => {
         if (track.kind === Track.Kind.Audio) { s.setAssistantAudioTracks((cur) => cur.includes(track) ? cur : [...cur, track]); addLog('info', 'ترک صوتی دریافت شد', `${participant.identity} · ${publication.source}`); }
-        else if (track.kind === Track.Kind.Video) { /* Tavus video is Daily iframe, not LiveKit video */ s.setAvatarReady(true); addLog('info', 'ترک ویدیویی دریافت شد', `${participant.identity}`); }
+        else if (track.kind === Track.Kind.Video) { s.setAvatarReady(true); addLog('info', 'ترک ویدیویی دریافت شد', `${participant.identity}`); }
       });
       room.on(RoomEvent.TrackUnsubscribed, (track, _pub, participant) => {
         if (track.kind === Track.Kind.Audio) s.setAssistantAudioTracks((cur) => cur.filter((item) => item !== track));
@@ -109,10 +122,9 @@ export default function App() {
 
   async function endSession() {
     addLog('info', 'درخواست پایان جلسه'); s.startingRef.current = false;
-    // end Tavus conversation if any
     if (tavusConversationId) {
       try { await endTavusConversation(tavusConversationId); addLog('info', 'Tavus conversation پایان یافت'); } catch (e) { addLog('warning', 'پایان Tavus ناموفق', errorMessage(e)); }
-      setTavusConversationId(null); setTavusUrl(null); setTavusStatus('');
+      setTavusConversationId(null); setTavusUrl(null); setTavusStatus(''); setTavusError('');
     }
     s.roomRef.current?.disconnect(); s.roomRef.current = null; s.setPhase('idle'); s.setMicEnabled(false); s.setAvatarReady(false); s.setAssistantAudioTracks([]); s.setAudioNeedsGesture(false); s.setDraftTranscript(''); setTavusStatus('');
   }
@@ -125,6 +137,11 @@ export default function App() {
   const connected = s.phase === 'connected';
   const avatarEnabled = Boolean(s.health?.avatarEnabled);
   const avatarProvider = s.health?.avatarProvider === 'tavus' ? 'tavus' : 'none';
+
+  function retryTavus() {
+    const roomName = s.roomRef.current?.name || `retry-${Date.now()}`;
+    doCreateTavus(roomName);
+  }
 
   return (
     <div className="app-shell" dir="rtl">
@@ -152,7 +169,7 @@ export default function App() {
           </div>
           <aside className="right-column">
             <div className="audio-output" aria-hidden="true">{s.assistantAudioTracks.map((track) => <RemoteAudioOutput key={track.sid} track={track} registry={s.assistantAudioRefs} />)}</div>
-            <VideoPanel avatarEnabled={avatarEnabled} avatarProvider={avatarProvider} avatarReady={s.avatarReady} connected={connected} assistantAudioTracks={s.assistantAudioTracks} audioNeedsGesture={s.audioNeedsGesture} enableAudioPlayback={enableAudioPlayback} tavusUrl={tavusUrl} tavusStatus={tavusStatus} />
+            <VideoPanel avatarEnabled={avatarEnabled} avatarProvider={avatarProvider} avatarReady={s.avatarReady} connected={connected} assistantAudioTracks={s.assistantAudioTracks} audioNeedsGesture={s.audioNeedsGesture} enableAudioPlayback={enableAudioPlayback} tavusUrl={tavusUrl} tavusStatus={tavusStatus} tavusError={tavusError} health={s.health} onRetryTavus={retryTavus} />
             <ErrorBoundary>
               <StatusPanel health={s.health} latency={s.latency} connected={connected} />
             </ErrorBoundary>
