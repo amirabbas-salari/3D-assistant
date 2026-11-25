@@ -1,13 +1,12 @@
 import { defineConfig } from 'vite';
 import react from '@vitejs/plugin-react';
-import { avatarkitVitePlugin } from '@spatius/avatarkit/vite';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 
 export default defineConfig({
-  plugins: [react(), avatarkitVitePlugin()],
+  plugins: [react()],
   // In the monorepo the Vite root is apps/web; this keeps `npm run dev` from
   // root and from apps/web both working.
   root: __dirname,
@@ -26,7 +25,6 @@ export default defineConfig({
       output: {
         manualChunks(id) {
           if (id.includes('/node_modules/livekit-client/')) return 'livekit';
-          if (id.includes('/node_modules/@spatius/')) return 'spatius';
           if (id.includes('/node_modules/react')) return 'react-vendor';
         },
       },

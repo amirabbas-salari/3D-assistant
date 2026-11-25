@@ -2,19 +2,18 @@
 
 سام یه مشاور صوتی فارسیه که مثل یه دوستِ حرفه‌ای باهات حرف می‌زنه — **عامیانه‌ی مؤدبانه**، نه خشکِ کتابی، نه لاتی. کارش اینه با راهنمایی‌های درست و تاثیرگذار، بهت نشون بده کجای فروشت می‌لنگه و چطور با **همکاری با تیم ما** می‌تونی بترکونی. همه‌چیز رو مجانی لو نمی‌ده؛ اول مسیر رو روشن می‌کنه، بعد دعوتت می‌کنه تا با هم اجراش کنید.
 
-زیر کاپوت: LiveKit صوتی، Cloudflare Workers AI، TTS فارسی، و آواتار زنده D-ID/Spatius. TTS پیش‌فرض `google/gemini-3.8-flash-lite-tts` با صدای مرد `Charon` و زبان `fa` است.
+زیر کاپوت: LiveKit صوتی، Cloudflare Workers AI، TTS فارسی، و آواتار زنده Tavus CVI (Daily). TTS پیش‌فرض `google/gemini-3.8-flash-lite-tts` با صدای مرد `Charon` و زبان `fa` است.
 
-برای LiveKit Inference نیازی به کلید API جداگانه‌ی ارائه‌دهنده‌ی TTS نیست؛ احراز هویت با اطلاعات LiveKit انجام می‌شود و مصرف از طریق LiveKit مدیریت می‌شود. مرورگر فقط شناسه‌های عمومی Spatius (App ID و Avatar ID) و یک توکن کوتاه‌عمر LiveKit محدود به همان room دریافت می‌کند.
+برای LiveKit Inference نیازی به کلید API جداگانه‌ی ارائه‌دهنده‌ی TTS نیست؛ احراز هویت با اطلاعات LiveKit انجام می‌شود و مصرف از طریق LiveKit مدیریت می‌شود. مرورگر Daily URL آواتار Tavus را از /api/tavus/conversation می‌گیرد و یک توکن کوتاه‌عمر LiveKit محدود به همان room دریافت می‌کند.
 
-> **حالت فعلی: آواتار خاموش است.** `AVATAR_ENABLED=false` آواتار را کامل غیرفعال می‌کند تا روی STT، LLM و TTS تمرکز شود. در این حالت Agent خودش صدای TTS را در room منتشر می‌کند و مرورگر فقط صدا و متن را نشان می‌دهد. برای برگرداندن آواتار، همان متغیر را `true` کنید و با `AVATAR_PROVIDER` پشتیبان دلخواه (`did` یا `spatius`) را انتخاب کنید.
+> **حالت فعلی: آواتار خاموش است.** `AVATAR_ENABLED=false` آواتار را کامل غیرفعال می‌کند تا روی STT، LLM و TTS تمرکز شود. در این حالت Agent خودش صدای TTS را در room منتشر می‌کند و مرورگر فقط صدا و متن را نشان می‌دهد. برای برگرداندن آواتار، همان متغیر را `true` کنید و `AVATAR_PROVIDER=tavus` بگذارید.
 
 ## پیش‌نیازها
 
 - Node.js 18+
 - Python 3.10+
-- یا حساب D-ID با API key و یک Expressive Agent (`DID_AGENT_ID`)، یا حساب Spatius با App ID، API key و Avatar ID
-- پروژه‌ی LiveKit Cloud با Inference فعال و دسترسی به مدل‌های STT/TTS
-- حساب Cloudflare با دسترسی Workers AI و API Token مجاز برای اجرای مدل‌ها
+- حساب Tavus با API key و Replica/Persona ID (https://platform.tavus.io) — اختیاری اگر `AVATAR_ENABLED=false`
+- پروژه‌ی LiveKit Cloud با Inference فعال و دسترسی به مدل‌های STT/TTS + Cloudflare یا OpenRouter برای LLM
 
 ## راه‌اندازی
 
@@ -23,7 +22,7 @@ npm install
 cp .env.example .env
 ```
 
-مقادیر LiveKit، Spatius و Cloudflare Workers AI را در `.env` تنظیم کنید. `SPATIUS_API_KEY` و توکن Cloudflare محرمانه‌اند و نباید در کد مرورگر یا متغیرهای `VITE_*` قرار بگیرند. `SPATIUS_APP_ID` و `SPATIUS_AVATAR_ID` برای بارگذاری AvatarKit در مرورگر استفاده می‌شوند.
+مقادیر LiveKit، Tavus و Cloudflare Workers AI را در `.env` تنظیم کنید. `TAVUS_API_KEY` محرمانه است و نباید در کد مرورگر یا `VITE_*` قرار بگیرد.
 
 ```bash
 python -m venv .venv
@@ -212,39 +211,39 @@ AVATAR_ENABLED=false
 
 این مقدار در سه جا خوانده می‌شود و هر سه با هم هماهنگ می‌مانند:
 
-- `agent.py` جلسه‌ی Spatius را نمی‌سازد و به‌جای آن صدای TTS خودش را در LiveKit منتشر می‌کند (`audio_enabled=True`).
+- `agent.py` جلسه‌ی Tavus را نمی‌سازد و به‌جای آن صدای TTS خودش را در LiveKit منتشر می‌کند (`audio_enabled=True`).
 - `server/index.js` دیگر برای ساخت جلسه به `SPATIUS_API_KEY`, `SPATIUS_APP_ID` و `SPATIUS_AVATAR_ID` نیاز ندارد؛ نبودشان مانع شروع جلسه نیست. مقدار `avatarEnabled` در `/api/health` گزارش می‌شود.
 - رابط کاربری پنل آواتار را پنهان می‌کند و به‌جایش کارت «صدا و متن» با وضعیت ترک صوتی نشان می‌دهد. المان پخش صدای remote در هر دو حالت فعال می‌ماند، وگرنه صدای دستیار قطع می‌شود.
 
-مزیت این حالت برای آزمایش: صدای TTS مستقیم از LiveKit پخش می‌شود و Spatius در مسیر نیست، پس هر مشکل صدا یا متن فقط می‌تواند از STT، LLM یا TTS باشد.
+مزیت این حالت برای آزمایش: صدای TTS مستقیم از LiveKit پخش می‌شود و Tavus در مسیر نیست، پس هر مشکل صدا یا متن فقط می‌تواند از STT، LLM یا TTS باشد.
 
 برای روشن‌کردن دوباره‌ی آواتار: `AVATAR_ENABLED=true` بگذارید و با `AVATAR_PROVIDER` انتخاب کنید کدام پشتیبان اجرا شود.
 
-## آواتار D-ID (پیشنهادی)
+## آواتار Tavus CVI (تنها گزینه)
 
-D-ID آواتار را به‌صورت ویدیوی زنده با لیپ‌سینک در **همان اتاق LiveKit** منتشر می‌کند. یعنی STT، LLM و TTS همان مسیر قبلی می‌مانند و فقط خروجی صدا به D-ID داده می‌شود؛ همان الگویی که پلاگین رسمی `livekit-plugins-did` پیاده می‌کند.
+Tavus آواتار را به‌صورت ویدیوی زنده با لیپ‌سینک در **همان اتاق LiveKit** منتشر می‌کند. یعنی STT، LLM و TTS همان مسیر قبلی می‌مانند و فقط خروجی صدا به Tavus داده می‌شود؛ همان الگویی که پلاگین رسمی `livekit-plugins-tavus` پیاده می‌کند.
 
 ```env
 AVATAR_ENABLED=true
-AVATAR_PROVIDER=did
-DID_API_KEY=your_did_api_key
+AVATAR_PROVIDER=tavus
+DID_API_KEY=your_tavus_api_key
 DID_AGENT_ID=agt_your_agent_id
 DID_AUDIO_SAMPLE_RATE=24000
 ```
 
-### ساختن Agent در D-ID
+### ساختن Agent در Tavus
 
-1. کلید API را از D-ID Studio (Account Settings) بردارید و در `DID_API_KEY` بگذارید. این کلید فقط روی سرور و Agent می‌ماند.
-2. یک **Expressive Agent** بسازید؛ در API یعنی `POST https://api.d-id.com/agents` با `presenter.type = "expressive"` و یک `presenter_id` (مثلاً `public_mia_elegant@avt_TJ0Tq5`) یا آواتار اختصاصی خودتان از V3 Instant Avatar. `id` برگشتی (`agt_...`) همان `DID_AGENT_ID` است. همین کار از رابط D-ID Studio هم انجام می‌شود.
-3. `AVATAR_PROVIDER=did` را ست کنید و Agent را ری‌استارت کنید. در لاگ Agent خط `D-ID avatar session started` و در پنل «اطلاعات اجرا» مقدار `avatarProvider: did` دیده می‌شود.
+1. کلید API را از Tavus Studio (Account Settings) بردارید و در `DID_API_KEY` بگذارید. این کلید فقط روی سرور و Agent می‌ماند.
+2. یک **Expressive Agent** بسازید؛ در API یعنی `POST https://api.d-id.com/agents` با `presenter.type = "expressive"` و یک `presenter_id` (مثلاً `public_mia_elegant@avt_TJ0Tq5`) یا آواتار اختصاصی خودتان از V3 Instant Avatar. `id` برگشتی (`agt_...`) همان `DID_AGENT_ID` است. همین کار از رابط Tavus Studio هم انجام می‌شود.
+3. `AVATAR_PROVIDER=tavus` را ست کنید و Agent را ری‌استارت کنید. در لاگ Agent خط `Tavus avatar session started` و در پنل «اطلاعات اجرا» مقدار `avatarProvider: tavus` دیده می‌شود.
 
 نکته‌های مهم:
 
-- D-ID فقط با **Expressive Agent** روی این مسیر کار می‌کند. ویدیوی V3 Instant Avatar که با `POST /scenes` ساخته می‌شود یک فایل از پیش تولیدشده است، نه آواتار زنده، و برای گفتگوی زنده مناسب نیست.
-- D-ID نرخ‌های ۱۶۰۰۰، ۲۴۰۰۰ و ۴۸۰۰۰ هرتز را می‌پذیرد؛ مقدار دیگر خودش resample می‌شود. اگر TTS شما نرخ دیگری دارد، `DID_AUDIO_SAMPLE_RATE` را برابر همان بگذارید تا تبدیل دوگانه نشود.
-- مرورگر برای D-ID به `<video>` معمولی وصل می‌شود (کلاس `avatar-video`)، پس `adaptiveStream` فقط برای Spatius خاموش می‌ماند و برای D-ID روشن است.
+- Tavus فقط با **Expressive Agent** روی این مسیر کار می‌کند. ویدیوی V3 Instant Avatar که با `POST /scenes` ساخته می‌شود یک فایل از پیش تولیدشده است، نه آواتار زنده، و برای گفتگوی زنده مناسب نیست.
+- Tavus نرخ‌های ۱۶۰۰۰، ۲۴۰۰۰ و ۴۸۰۰۰ هرتز را می‌پذیرد؛ مقدار دیگر خودش resample می‌شود. اگر TTS شما نرخ دیگری دارد، `DID_AUDIO_SAMPLE_RATE` را برابر همان بگذارید تا تبدیل دوگانه نشود.
+- مرورگر برای Tavus به `<video>` معمولی وصل می‌شود (کلاس `avatar-video`)، پس `adaptiveStream` فقط برای Tavus خاموش می‌ماند و برای Tavus روشن است.
 - اگر شروع آواتار شکست بخورد، Agent فقط لاگ خطا می‌دهد و با صدای مستقیم LiveKit ادامه می‌دهد؛ گفتگو قطع نمی‌شود.
-- **پلاگین آواتار باید در بالای `agent.py` import شود، نه داخل `entrypoint`.** هر پلاگین LiveKit هنگام import خودش را ثبت می‌کند و `Plugin.register_plugin()` فقط روی main thread اجازه دارد. روی ویندوز LiveKit پیش‌فرض jobها را در thread اجرا می‌کند (`JobExecutorType.THREAD`)، پس import تنبل داخل job با `RuntimeError: Plugins must be registered on the main thread` کل job را می‌کشد. به همین دلیل `livekit.plugins.did` و `livekit.plugins.spatius` در سطح ماژول و داخل `try/except ImportError` import می‌شوند؛ نبودن پکیج فقط هنگام درخواست آواتار به‌صورت پیام خطا در لاگ دیده می‌شود.
+- **پلاگین آواتار باید در بالای `agent.py` import شود، نه داخل `entrypoint`.** هر پلاگین LiveKit هنگام import خودش را ثبت می‌کند و `Plugin.register_plugin()` فقط روی main thread اجازه دارد. روی ویندوز LiveKit پیش‌فرض jobها را در thread اجرا می‌کند (`JobExecutorType.THREAD`)، پس import تنبل داخل job با `RuntimeError: Plugins must be registered on the main thread` کل job را می‌کشد. به همین دلیل `livekit.plugins.tavus` و `livekit.plugins.tavus` در سطح ماژول و داخل `try/except ImportError` import می‌شوند؛ نبودن پکیج فقط هنگام درخواست آواتار به‌صورت پیام خطا در لاگ دیده می‌شود.
 
 ## خطای ۴۲۹ در STT و TTS (سهمیه‌ی LiveKit Inference)
 
@@ -297,7 +296,7 @@ GOOGLE_API_KEY=...     # aistudio.google.com/apikey (کلید Gemini API، نه 
 | STT | `deepgram/nova-3` از گیت‌وی LiveKit | `deepgram.Nova3` مستقیم با `DEEPGRAM_API_KEY` |
 | TTS | `google/gemini-3.8-flash-lite-tts` از گیت‌وی LiveKit | `google.beta.GeminiTTS` مستقیم با `GOOGLE_API_KEY` |
 | LLM | Cloudflare Workers AI | بدون تغییر (`CLOUDFLARE_*`) |
-| آواتار | D-ID / Spatius | بدون تغییر (`DID_*` / `SPATIUS_*`) |
+| آواتار | Tavus | بدون تغییر (`DID_*` / `SPATIUS_*`) |
 | سهمیه | سقف ماهانه‌ی پلن Build | سهمیه‌ی حساب Deepgram و Google |
 
 نکته‌ها:
@@ -318,12 +317,12 @@ uv pip install -r requirements.txt
 
 پنل «صدا و متن» در ردیف `STT / TTS` نشان می‌دهد کدام مسیر فعال است، و `/api/health` هم فیلدهای `speechProvider` و `speechConfigured` را برمی‌گرداند. اگر `speechConfigured=false` باشد، `POST /api/session` با ۵۰۳ و پیام مشخص می‌گوید چه کلیدی کم است.
 
-## تنظیم Spatius و LiveKit Inference TTS
+## تنظیم Tavus و LiveKit Inference TTS
 
-این بخش فقط زمانی لازم است که `AVATAR_PROVIDER=spatius` باشد.
+این بخش فقط زمانی لازم است که `AVATAR_PROVIDER=tavus` باشد.
 
 1. در LiveKit Cloud یک project بسازید و `LIVEKIT_URL`, `LIVEKIT_API_KEY`, `LIVEKIT_API_SECRET` را در `.env` قرار دهید. LiveKit Inference برای TTS از همین اطلاعات استفاده می‌کند و به Google API key جداگانه نیاز ندارد.
-2. در Spatius Studio یک App بسازید و `SPATIUS_API_KEY`, `SPATIUS_APP_ID` و `SPATIUS_AVATAR_ID` را تنظیم کنید. API key فقط در سرور و Agent می‌ماند. ناحیه به‌صورت خودکار انتخاب می‌شود؛ در صورت نیاز `SPATIUS_REGION` را تنظیم کنید. قالب صدای ورودی پیش‌فرض `pcm_s16le` است تا به DLL بومی Opus وابسته نباشد. اگر `ogg_opus` را انتخاب کردید، نرخ‌های مجاز `8000`, `12000`, `16000`, `24000` و `48000` هرتز هستند و سیستم باید libopus داشته باشد.
+2. در Tavus Studio یک App بسازید و `SPATIUS_API_KEY`, `SPATIUS_APP_ID` و `SPATIUS_AVATAR_ID` را تنظیم کنید. API key فقط در سرور و Agent می‌ماند. ناحیه به‌صورت خودکار انتخاب می‌شود؛ در صورت نیاز `SPATIUS_REGION` را تنظیم کنید. قالب صدای ورودی پیش‌فرض `pcm_s16le` است تا به DLL بومی Opus وابسته نباشد. اگر `ogg_opus` را انتخاب کردید، نرخ‌های مجاز `8000`, `12000`, `16000`, `24000` و `48000` هرتز هستند و سیستم باید libopus داشته باشد.
 3. مدل و صدای TTS را با `LIVEKIT_TTS_MODEL`, `LIVEKIT_TTS_VOICE` و `LIVEKIT_TTS_LANGUAGE` تنظیم کنید. پیش‌فرض‌ها به‌ترتیب `google/gemini-3.8-flash-lite-tts`, `Charon` و `fa` هستند. `Charon` صدای مرد است؛ صدای قبلی `Kore` زنانه بود. صداهای مرد دیگر Gemini عبارت‌اند از `Orus`, `Fenrir`, `Puck`, `Iapetus`, `Algenib`, `Schedar` و `Achird`. این مدل LiveKit Inference زبان فارسی را پشتیبانی می‌کند.
 4. در Cloudflare مقدار `CLOUDFLARE_ACCOUNT_ID` و توکن دارای مجوز Workers AI را تنظیم کنید. سقف خروجی LLM با `CLOUDFLARE_LLM_MAX_TOKENS` کنترل می‌شود و پیش‌فرض آن `400` است (برای جواب‌های کوتاهِ گفتگویی)؛ این مقدار صریحاً برای جلوگیری از سقف پیش‌فرض 256 توکنی Workers AI فرستاده می‌شود. برای روخوانی، Agent باید متن کامل را در پاسخ تولید کند؛ TTS فقط همان پاسخ تولیدشده را می‌خواند.
 5. Agent با نام `sam-voice-agent` dispatch می‌شود؛ همین نام را با `LIVEKIT_AGENT_NAME` هماهنگ نگه دارید. (این نام داخلی است و به کاربر نمی‌رسد؛ نامی که کاربر می‌شنود `ASSISTANT_NAME` است.)
@@ -333,17 +332,17 @@ uv pip install -r requirements.txt
 - TTS: `google/gemini-3.8-flash-lite-tts` با صدای مرد `Charon` و زبان `fa`
 - LLM: `@cf/meta/llama-3.3-70b-instruct-fp8-fast` از Cloudflare Workers AI
 
-Agent به LiveKit وصل می‌شود، STT و TTS را از LiveKit Inference می‌گیرد و جلسه‌ی Spatius را برای همگام‌سازی حرکت آواتار راه می‌اندازد. فرانت‌اند با `@spatius/avatarkit-rtc` ترک حرکت LiveKit را دریافت می‌کند و AvatarKit آواتار را در مرورگر رندر می‌کند.
+Agent به LiveKit وصل می‌شود، STT و TTS را از LiveKit Inference می‌گیرد و جلسه‌ی Tavus را برای همگام‌سازی حرکت آواتار راه می‌اندازد. فرانت‌اند با `@tavus/avatarkit-rtc` ترک حرکت LiveKit را دریافت می‌کند و AvatarKit آواتار را در مرورگر رندر می‌کند.
 
 ### الزام `adaptiveStream: false` برای حرکت آواتار
 
-پخش صدا از خواندن متن جداست؛ حتی وقتی همه‌چیز درست است، آواتار ممکن است صدا داشته باشد ولی لب نزند. علت رایج این است که Spatius داده‌ی حرکت را روی یک ترک ویدیویی می‌فرستد که SDK آن را در یک المان `<video>` پنهان (`display:none`) می‌گذارد. اگر `Room` با `adaptiveStream: true` ساخته شود، LiveKit نتیجه می‌گیرد «کسی این ویدیو را نمی‌بیند» و به سرور می‌گوید ترک را متوقف کند؛ در نتیجه هیچ فریم حرکتی نمی‌رسد و صورت آواتار ثابت می‌ماند، در حالی که صدا عادی پخش می‌شود.
+پخش صدا از خواندن متن جداست؛ حتی وقتی همه‌چیز درست است، آواتار ممکن است صدا داشته باشد ولی لب نزند. علت رایج این است که Tavus داده‌ی حرکت را روی یک ترک ویدیویی می‌فرستد که SDK آن را در یک المان `<video>` پنهان (`display:none`) می‌گذارد. اگر `Room` با `adaptiveStream: true` ساخته شود، LiveKit نتیجه می‌گیرد «کسی این ویدیو را نمی‌بیند» و به سرور می‌گوید ترک را متوقف کند؛ در نتیجه هیچ فریم حرکتی نمی‌رسد و صورت آواتار ثابت می‌ماند، در حالی که صدا عادی پخش می‌شود.
 
 بنابراین `src/main.jsx` اتاق را با `adaptiveStream: false` می‌سازد و ترک حرکت را بعد از اشتراک صریحاً با `publication.setEnabled(true)` فعال نگه می‌دارد. این گزینه را دوباره روشن نکنید. `dynacast` فقط روی انتشار اثر دارد و روشن می‌ماند.
 
 ### هماهنگ‌کردن لب و صدا
 
-در حالت آواتار Spatius، صدا از یک المان `<audio>` مرورگر پخش می‌شود ولی حرکت لب را SDK روی ساعت خودش (۲۵ فریم بر ثانیه) رندر می‌کند. این دو ساعت مستقل‌اند، پس حرکت کمی **زودتر** از صدا می‌رسد: لب‌ها قبل از شنیدن صدا تکان می‌خورند.
+در حالت آواتار Tavus، صدا از یک المان `<audio>` مرورگر پخش می‌شود ولی حرکت لب را SDK روی ساعت خودش (۲۵ فریم بر ثانیه) رندر می‌کند. این دو ساعت مستقل‌اند، پس حرکت کمی **زودتر** از صدا می‌رسد: لب‌ها قبل از شنیدن صدا تکان می‌خورند.
 
 نکته‌ی مهمی که باید بدانید: فریم‌های حرکت فقط یک شماره‌ی ترتیبی دارند و هیچ‌کدام نمی‌گویند به کدام لحظه‌ی صدا تعلق دارند. پس هم‌ترازی «فریم به فریم» از مرورگر ممکن نیست. آنچه ممکن است این است: هر فریم از `avatarView.renderFromProtobuf` عبور می‌کند و حلقه‌ی زمان‌بندی SDK منتظر همان فراخوانی می‌ماند. `src/lipsync.js` فریم‌های **اول هر نوبت** را تا اندازه‌ی مشخصی نگه می‌دارد و بعد رهایشان می‌کند؛ نتیجه این است که کل مسیر حرکت به اندازه‌ی همان نگه‌داشتن عقب می‌افتد، بدون اینکه فریم‌های بعدی دست بخورند.
 
@@ -354,7 +353,7 @@ Agent به LiveKit وصل می‌شود، STT و TTS را از LiveKit Inference
 | لب **زودتر** از صدا حرکت می‌کند | عدد را زیاد کنید (پیش‌فرض ۱۲۰ms) |
 | لب **دیرتر** از صدا حرکت می‌کند | عدد را کم کنید یا صفر بگذارید |
 
-عدد در همان مرورگر ذخیره می‌شود و از نوبت بعدی اثر می‌کند. مقدار درست به مسیر شبکه‌ی شما و نود Spatius بستگی دارد و از هیچ API مرورگر قابل خواندن نیست، پس تنها راه، شنیدن و دیدن هم‌زمان است.
+عدد در همان مرورگر ذخیره می‌شود و از نوبت بعدی اثر می‌کند. مقدار درست به مسیر شبکه‌ی شما و نود Tavus بستگی دارد و از هیچ API مرورگر قابل خواندن نیست، پس تنها راه، شنیدن و دیدن هم‌زمان است.
 
 دو محافظ دارد: اگر نوبت اصلاً صدا نداشته باشد، پس از حداکثر ۲.۵ ثانیه فریم‌ها رها می‌شوند (صورت یخ نمی‌زند)؛ اگر صدا متوقف شود هم بلافاصله رها می‌شوند.
 
@@ -369,7 +368,7 @@ Agent به LiveKit وصل می‌شود، STT و TTS را از LiveKit Inference
 
 ### تشخیص «لب نمی‌زند»
 
-رسیدن فریم حرکتی و دیده‌شدن حرکت، دو چیز جدا هستند. Spatius برای ساختن حرکت چند ثانیه‌ای بعد از شروع جمله شروع می‌کند، بنابراین نمونه‌برداری از ثانیه‌ی اول نتیجه‌ی منفی کاذب می‌دهد. `src/main.jsx` حالا وسط هر جمله (از ثانیه‌ی ۱٫۵) دو نمونه‌ی ۱٫۲ ثانیه‌ای می‌گیرد و هم‌زمان شمارنده‌ی فریم Spatius و تصویر رندرشده را مقایسه می‌کند:
+رسیدن فریم حرکتی و دیده‌شدن حرکت، دو چیز جدا هستند. Tavus برای ساختن حرکت چند ثانیه‌ای بعد از شروع جمله شروع می‌کند، بنابراین نمونه‌برداری از ثانیه‌ی اول نتیجه‌ی منفی کاذب می‌دهد. `src/main.jsx` حالا وسط هر جمله (از ثانیه‌ی ۱٫۵) دو نمونه‌ی ۱٫۲ ثانیه‌ای می‌گیرد و هم‌زمان شمارنده‌ی فریم Tavus و تصویر رندرشده را مقایسه می‌کند:
 
 - `آواتار در حال حرکت است` — هم فریم می‌رسد و هم تصویر عوض می‌شود.
 - `در این بازه فریم حرکتی به آواتار نرسید` — شبکه/ترک مشکل دارد؛ `adaptiveStream` و وضعیت publication را بررسی کنید.
@@ -378,9 +377,9 @@ Agent به LiveKit وصل می‌شود، STT و TTS را از LiveKit Inference
 
 خطاهای رندر خود AvatarKit هم از طریق `controller.onError` در همان پنل لاگ با کد خطا ثبت می‌شوند؛ قبلاً این callback ثبت نمی‌شد و خطاها بی‌صدا از دست می‌رفتند.
 
-### صدای Spatius در ویندوز
+### صدای Tavus در ویندوز
 
-قالب پیش‌فرض `pcm_s16le` از نیاز به نصب جداگانه‌ی `libopus` روی ویندوز جلوگیری می‌کند. در صورت انتخاب `SPATIUS_AUDIO_FORMAT=ogg_opus`، باید کتابخانه‌ی بومی Opus در دسترس Python باشد؛ در غیر این صورت ارسال صدا به Spatius متوقف می‌شود و آواتار ممکن است بی‌حرکت بماند.
+قالب پیش‌فرض `pcm_s16le` از نیاز به نصب جداگانه‌ی `libopus` روی ویندوز جلوگیری می‌کند. در صورت انتخاب `SPATIUS_AUDIO_FORMAT=ogg_opus`، باید کتابخانه‌ی بومی Opus در دسترس Python باشد؛ در غیر این صورت ارسال صدا به Tavus متوقف می‌شود و آواتار ممکن است بی‌حرکت بماند.
 
 چت متنی مستقیم نیز در دسترس است. اگر اجازه‌ی میکروفون رد شود یا ورودی صوتی در دسترس نباشد، کاربر می‌تواند متن بفرستد.
 
@@ -517,7 +516,7 @@ python scripts/check_llm_speed.py --runs 5 --prompt "سلام، حالت چطو�
 | `llm_node_ttfs` | `AGENT_FAST_START=true` (جمله‌ی اول کوتاه) یا پاسخ کوتاه‌تر |
 | `tts_node_ttfb` | مسیر TTS؛ سهم معمولاً کوچک‌ترین است |
 | `knowledge_lookup` | خودِ جست‌وجوی BM25؛ معمولاً زیر ۱ms — اگر بزرگ بود، ایندکس یا دیسک را بررسی کنید |
-| `playback_latency` | با آواتار روشن بزرگ می‌شود — همان مسیر D-ID |
+| `playback_latency` | با آواتار روشن بزرگ می‌شود — همان مسیر Tavus |
 
 **ترتیب کار:** اول `AGENT_SPEED_PROFILE=fast` را بگذارید و چند نوبت حرف بزنید. خط `→ گلوگاه` را ببینید. اگر باز هم `end_of_turn_delay` بود، `fastest` را امتحان کنید؛ اگر جایش را به `llm_node_ttft` داد، آن‌وقت بحث مدل است و تنظیم پایپ‌لاین دیگر کمکی نمی‌کند — سراغ `CLOUDFLARE_LLM_REASONING_EFFORT` و `scripts/check_llm_speed.py` بروید.
 
@@ -679,7 +678,7 @@ python scripts/check_retrieval.py
 | `llm_node_ttft` | درخواست ← اولین توکن LLM | مدل یا شبکه؛ `@cf/openai/gpt-oss-120b` روی Cloudflare |
 | `llm_node_ttfs` | درخواست ← اولین جمله‌ی کامل به TTS | مدل دیر جمله می‌بندد؛ جمله‌های کوتاه‌تر در system prompt کمک می‌کند |
 | `tts_node_ttfb` | اولین جمله ← اولین بایت صدا | TTS یا اتصال به آن؛ معمولاً کوچک‌ترین سهم |
-| `playback_latency` | اولین فریم ← شروع پخش | با آواتار روشن بزرگ می‌شود (D-ID باید صدا را همگام کند) |
+| `playback_latency` | اولین فریم ← شروع پخش | با آواتار روشن بزرگ می‌شود (Tavus باید صدا را همگام کند) |
 | `response_delay` | پایان سوال کاربر ← شروع پاسخ دستیار | **فیلد جدیدِ درخواستی** — گلوگاه اصلی تجربه؛ برابر `e2e_latency` وقتی SDK بدهد، وگرنه جمع مراحل سریال؛ در پنل سبزِ برجسته و در لاگ `پاسخ‌دهی` دیده می‌شود |
 | `e2e_latency` | پایان گفتار ← شروع صدای Agent | جمعِ حس‌شده‌ی کاربر؛ ملاک نهایی (همان `response_delay`) |
 
@@ -705,10 +704,10 @@ python scripts/check_retrieval.py
 
 ## API
 
-- `GET /api/health` — وضعیت پیکربندی، بدون افشای رازها؛ شامل `avatarEnabled`, `avatarProvider`, `didConfigured` و `spatiusConfigured`
-- `POST /api/session` — ساخت LiveKit room، dispatch کردن Agent و برگرداندن JWT کوتاه‌عمر برای همان room به‌همراه `avatarProvider` و شناسه‌های عمومی Spatius
+- `GET /api/health` — وضعیت پیکربندی، بدون افشای رازها؛ شامل `avatarEnabled`, `avatarProvider`, `tavusConfigured` و `tavusConfigured`
+- `POST /api/session` — ساخت LiveKit room، dispatch کردن Agent و برگرداندن JWT کوتاه‌عمر برای همان room به‌همراه `avatarProvider` و شناسه‌های عمومی Tavus
 - `POST /api/sessions/cleanup` — بستن roomهای رهاشده با پیشوند `sam-` تا اتصال‌های STT/TTS آزاد شوند
 
 زمان‌بندی نوبت‌ها از طریق data packet با `type: "latency"` روی topic `diagnostics` هم فرستاده می‌شود؛ شکل آن `{turns, averages, last, response_delay_ms}` است و `last.stages` همان مراحل جدول بالا با مقدار میلی‌ثانیه. فیلد `response_delay` / `response_delay_ms` مدت «پایان سوال کاربر → شروع پاسخ» است و در پنل با کارت سبزِ برجسته در بالای نوارها نمایش داده می‌شود.
 
-`agent.py` از LiveKit Inference برای STT و TTS، Cloudflare Workers AI برای LLM و پلاگین رسمی `livekit-plugins-spatius` برای آواتار استفاده می‌کند. متن تشخیص‌داده‌شده و پاسخ Agent به‌صورت data packet به رابط فرستاده می‌شوند.
+`agent.py` از LiveKit Inference برای STT و TTS، Cloudflare Workers AI برای LLM و پلاگین رسمی `livekit-plugins-tavus` برای آواتار استفاده می‌کند. متن تشخیص‌داده‌شده و پاسخ Agent به‌صورت data packet به رابط فرستاده می‌شوند.
