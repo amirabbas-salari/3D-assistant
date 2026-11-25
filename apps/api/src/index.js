@@ -7,6 +7,7 @@ import { corsMiddleware } from './config/cors.js';
 import healthRouter from './routes/health.js';
 import sessionRouter from './routes/session.js';
 import cleanupRouter from './routes/cleanup.js';
+import tavusRouter from './routes/tavus.js';
 
 const app = express();
 const port = Number(process.env.PORT || 3001);
@@ -18,6 +19,7 @@ app.use(corsMiddleware);
 app.use('/api', healthRouter);
 app.use('/api', sessionRouter);
 app.use('/api', cleanupRouter);
+app.use('/api', tavusRouter);
 
 if (process.env.NODE_ENV === 'production') {
   const candidates = [
