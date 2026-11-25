@@ -26,9 +26,9 @@ AGENT_SPEED_PROFILE=ultra
 # LIVEKIT_API_SECRET="mHuMNyeY1md4iNgQ6bJuClqOOvJqmNfui4byy8RKTiy"
 # LIVEKIT_API_SECRET="kfjep2fDvoi4s0zWdawj4DfjeZt29rmdiBOxNbJz2eNP"
 
-LIVEKIT_URL='wss://ai-voice-agent-m09crb6c.livekit.cloud'
-LIVEKIT_API_KEY='APIyyfUVZav5KU6'
-LIVEKIT_API_SECRET='yKTCPS4xnumyKZAOXrHa7pcdctOVq0bj0xWIuBX6zNF'
+LIVEKIT_URL='wss://gg-n8j20i56.livekit.cloud'
+LIVEKIT_API_KEY='APIHviGi8XxAq8j'
+LIVEKIT_API_SECRET='RheZwjWZHx0BxUWk1zIfmSX7pCQkpiUhEjTxhZVlCfOA'
 
 
 # Persian STT / TTS / LLM
@@ -157,8 +157,8 @@ AVATAR_ENABLED=true
 # Available providers:
 # did
 # spatius
-# AVATAR_PROVIDER=spatius
-AVATAR_PROVIDER=tavus
+AVATAR_PROVIDER=spatius
+# AVATAR_PROVIDER=tavus
 
 
 # ------------------------------------------------------------
