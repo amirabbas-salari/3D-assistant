@@ -152,43 +152,29 @@ function computeSpans(last) {
         const rawStart = toNum(t.start, 0);
         const rawEnd = toNum(t.end, rawStart);
         const dur = toNum(t.dur, rawEnd - rawStart);
-        // حالت جدید: t.is_llm_relative=true → t.start نسبت به llmStart است، پس llmStart اضافه کن
-        // حالت قدیمی fallback: اگر خیلی بزرگ بود (نسبت به turn_start) تفریق کن
-        const isLlmRel = (t).is_llm_relative === true;
+        // تشخیص مبدا: اگر t.start خیلی بزرگ (>2s و > llmStart+1s) یعنی نسبت به turn_start است
         let absStart, absEnd;
-        if (isLlmRel) {
-          absStart = llmStart + rawStart;
-          absEnd = llmStart + rawEnd;
-        } else if (hasSTTTokens && _sttTotalForTTS > 500 && rawStart > _sttTotalForTTS + llmStart + 200) {
-          // legacy turn-based → به pipeline تبدیل کن
+        if (hasSTTTokens && _sttTotalForTTS > 500 && rawStart > _sttTotalForTTS + llmStart + 200) {
+          // turn-based → به pipeline تبدیل کن: کم کردن مدت صحبت
           absStart = rawStart - _sttTotalForTTS;
           absEnd = rawEnd - _sttTotalForTTS;
         } else {
+          // llm-relative (حالت فعلی) → llmStart اضافه کن
           absStart = llmStart + rawStart;
           absEnd = llmStart + rawEnd;
-        }
-        // تضمین مثبت بودن و مرتب بودن
-        if (absEnd < absStart) {
-          const tmp = absStart;
-          absStart = absEnd;
-          absEnd = tmp;
         }
         ttsSegments.push({
           idx,
           start: absStart,
           end: absEnd,
-          dur: Math.max(0, dur),
+          dur,
           text: String(t.text || '').slice(0, 24),
           color: ttsColor(idx),
         });
       }
-      // مرتب‌سازی بر اساس start برای جلوگیری از -duration
-      ttsSegments.sort((a, b) => a.start - b.start);
       if (ttsSegments.length) {
         const gStart = ttsSegments[0].start;
-        const gEnd = Math.max(...ttsSegments.map(s => s.end));
-        // اگر محاسبه گروه هنوز منفی بود، از مجموع dur ها استفاده کن
-        const dur = Math.max(0, gEnd - gStart) || ttsSegments.reduce((sum, s) => sum + s.dur, 0);
+        const gEnd = ttsSegments[ttsSegments.length - 1].end;
         ttsGroup = {
           key: 'tts_group',
           label: `صدا (TTS) — همه تکه‌ها`,
@@ -196,7 +182,7 @@ function computeSpans(last) {
           color: '#4527a0',
           start: gStart,
           end: gEnd,
-          dur,
+          dur: gEnd - gStart,
           kind: 'tts_group',
           segments: ttsSegments,
           totalCount: ttoks.length,

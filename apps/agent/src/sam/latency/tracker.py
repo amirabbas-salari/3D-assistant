@@ -218,47 +218,31 @@ class LatencyTracker:
 
     def on_tts_start(self, text: str) -> None:
         now = time.perf_counter()
-        # مبنا را pipeline-start بسنج (نه turn_start که 11s صحبت کاربر را هم شامل می‌شود)
-        # turn_start برای STT درست است، ولی برای TTS باید نسبت به پایان گفتار باشد تا محور گانت منفی نشود
-        # اگر _llm_start_ts داریم، به pipeline نزدیک‌تریم (≈endpointing بعد)، وگرنه turn_start
-        # نگاشت نهایی در فرانت‌اند دیگر تفریق sttTotal نیاز ندارد
-        if self._llm_start_ts is not None:
-            base = self._llm_start_ts
-            # برای اینکه TTS روی محور pipeline درست بیوفتد، llmStart را کم می‌کنیم و در فرانت‌ند دوباره اضافه می‌شود
-            # پس اینجا base را llm_start بگذار، فرانت‌ند llmStart اضافه می‌کند → معادل pipeline
-            start_ms = (now - base) * 1000.0
-            # برای جلوگیری از منفی، اگر TTS قبل از LLM شروع شد (preemptive)، زمان منفی را صفر کن
-            if start_ms < -50:
-                start_ms = 0
-        else:
-            self._turn_start_ts = self._turn_start_ts or now
-            base = self._turn_start_ts
-            start_ms = (now - base) * 1000.0
-        self._tts_pending = {"text": text[:60].replace("\n", " "), "start": round(start_ms, 1), "start_ts": now, "base": base, "is_llm_relative": self._llm_start_ts is not None}
+        # همیشه نسبت به turn_start بسنج — محور گانت 0 = پایان گفتار نیست، بلکه turn_start است؛
+        # برای سازگاری با حالت pipeline (0=پایان گفتار) در فرانت‌ند تبدیل انجام می‌شود
+        # باگ قبلی: base = _llm_start_ts باعث می‌شد TTS روی 0.8s نمایش داده شود در حالی که LLM روی 1.0s بود (قبل از LLM!)
+        self._turn_start_ts = self._turn_start_ts or now
+        base = self._turn_start_ts
+        start_ms = (now - base) * 1000.0
+        self._tts_pending = {"text": text[:60].replace("\n", " "), "start": round(start_ms, 1), "start_ts": now, "base": base}
 
     def on_tts_end(self, text: str | None = None) -> None:
         if not self._tts_pending:
             return
         now = time.perf_counter()
         base = self._tts_pending.get("base")
-        is_llm_rel = self._tts_pending.get("is_llm_relative", False)
         if base is None:
-            base = self._llm_start_ts or self._turn_start_ts or now
+            base = self._turn_start_ts or self._llm_start_ts or now
         start_ms = self._tts_pending["start"]
-        # اگر مبنا llm بود، end هم نسبت به llm بسنج؛ وگرنه نسبت به turn_start
         end_ms = (now - base) * 1000.0
-        if is_llm_rel and end_ms < start_ms:
-            # اگر TTS سریع تمام شد و llm_start بعدش بود، تصحیح کن
-            end_ms = start_ms + max(0, (now - self._tts_pending["start_ts"]) * 1000.0)
-        dur_ms = max(0, end_ms - start_ms)
+        dur_ms = end_ms - start_ms
         safe_text = (text or self._tts_pending.get("text") or "")[:50].replace("\n", " ")
         self._tts_tokens.append({
             "idx": len(self._tts_tokens) + 1,
             "text": safe_text,
             "start": round(start_ms, 1),
             "end": round(end_ms, 1),
-            "dur": round(dur_ms, 1),
-            "is_llm_relative": is_llm_rel,
+            "dur": round(max(0, dur_ms), 1),
         })
         self._tts_pending = None
 
