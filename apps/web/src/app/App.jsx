@@ -21,6 +21,8 @@ export default function App() {
   const [tavusStatus, setTavusStatus] = React.useState('');
   const [tavusConversationId, setTavusConversationId] = React.useState(null);
   const [tavusError, setTavusError] = React.useState('');
+  const [avatarVideoTrack, setAvatarVideoTrack] = React.useState(null);
+  const avatarVideoRef = React.useRef(null);
 
   function addLog(level, message, details = '') {
     s.setLogs((cur) => [...cur.slice(-(MAX_LOG_ENTRIES - 1)), { id: `${Date.now()}-${Math.random()}`, time: messageTime(), level: String(level || 'info').toLowerCase(), message: String(message || ''), details: details ? String(details) : '' }]);
@@ -30,7 +32,6 @@ export default function App() {
     s.setChatMessages((cur) => [...cur.slice(-(MAX_CHAT_MESSAGES - 1)), { id: `${Date.now()}-${Math.random()}`, role, text: String(text), source, time: messageTime() }]);
   }
 
-  // fetch health on mount + refresh after session start
   const refreshHealth = React.useCallback(() => {
     fetchHealth().then((data) => { s.setHealth(data); addLog(data.configured ? 'info' : 'warning', 'بررسی پیکربندی API انجام شد', JSON.stringify(data, null, 2)); }).catch((e) => { s.setHealth({ configured: false }); addLog('error', 'دسترسی به API ناموفق بود', errorMessage(e)); });
   }, []);
@@ -45,6 +46,9 @@ export default function App() {
   React.useEffect(() => { if (s.logRef.current) s.logRef.current.scrollTop = s.logRef.current.scrollHeight; }, [s.logs]);
 
   function doCreateTavus(roomName) {
+    // فقط در حالت CVI استفاده می‌شود — livekit mode ویدیو را از LiveKit track می‌گیرد
+    const mode = s.health?.tavusAvatarMode || 'livekit';
+    if (mode === 'livekit') return;
     setTavusError('');
     setTavusStatus('در حال اتصال به Tavus…');
     createTavusConversation({ conversation_name: `sam-${roomName || Date.now()}` })
@@ -68,20 +72,25 @@ export default function App() {
   async function startSession() {
     if (s.phase !== 'idle' || s.startingRef.current) return;
     s.startingRef.current = true; s.setPhase('connecting'); addLog('info', 'درخواست ایجاد جلسه ارسال شد');
-    setTavusError(''); setTavusUrl(null); setTavusConversationId(null); setTavusStatus('');
+    setTavusError(''); setTavusUrl(null); setTavusConversationId(null); setTavusStatus(''); setAvatarVideoTrack(null); s.setAvatarReady(false);
     let room;
     try {
       const [data, livekit] = await Promise.all([createSession({}), import('livekit-client')]);
       const { Room, RoomEvent, Track } = livekit;
       const provider = data.avatarProvider === 'tavus' ? 'tavus' : 'none';
+      const tavusMode = data.tavusAvatarMode || s.health?.tavusAvatarMode || 'livekit';
       room = new Room({ adaptiveStream: false, dynacast: true });
       s.roomRef.current = room;
       if (provider === 'none') addLog('info', 'آواتار خاموش است', 'AVATAR_ENABLED=false · فقط صدا و متن فعال است');
       else if (provider === 'tavus') {
-        addLog('info', 'آواتار Tavus فعال است', `replica=${data.tavusReplicaId || 'env'} persona=${data.tavusPersonaId || 'env'} — در حال ساخت conversation...`);
-        doCreateTavus(data.roomName);
+        if (tavusMode === 'livekit') {
+          addLog('info', 'آواتار Tavus (livekit lip-sync) فعال است', `replica=${data.tavusReplicaId || 'env'} persona=${data.tavusPersonaId || 'env'} — صدای TTS پروژه به آواتار stream می‌شود، ویدیو از LiveKit می‌آید`);
+          setTavusStatus('در انتظار ویدیوی آواتار…');
+        } else {
+          addLog('info', 'آواتار Tavus (CVI Daily) فعال است', `replica=${data.tavusReplicaId || 'env'} persona=${data.tavusPersonaId || 'env'} — در حال ساخت conversation...`);
+          doCreateTavus(data.roomName);
+        }
       }
-      // refresh health to show current tavusConfigured state
       refreshHealth();
 
       room.on(RoomEvent.DataReceived, (payload) => {
@@ -96,11 +105,29 @@ export default function App() {
       room.on(RoomEvent.ParticipantConnected, (p) => addLog('info', 'شرکت‌کننده به اتاق پیوست', p.identity));
       room.on(RoomEvent.ParticipantDisconnected, (p) => addLog('warning', 'شرکت‌کننده از اتاق خارج شد', p.identity));
       room.on(RoomEvent.TrackSubscribed, (track, publication, participant) => {
-        if (track.kind === Track.Kind.Audio) { s.setAssistantAudioTracks((cur) => cur.includes(track) ? cur : [...cur, track]); addLog('info', 'ترک صوتی دریافت شد', `${participant.identity} · ${publication.source}`); }
-        else if (track.kind === Track.Kind.Video) { s.setAvatarReady(true); addLog('info', 'ترک ویدیویی دریافت شد', `${participant.identity}`); }
+        if (track.kind === Track.Kind.Audio) {
+          s.setAssistantAudioTracks((cur) => cur.includes(track) ? cur : [...cur, track]);
+          addLog('info', 'ترک صوتی دریافت شد', `${participant.identity} · ${publication.source}`);
+        } else if (track.kind === Track.Kind.Video) {
+          // Tavus livekit avatar publishes video as tavus-avatar-agent
+          const isAvatar = participant.identity.includes('tavus') || participant.identity.includes('avatar');
+          if (isAvatar) {
+            setAvatarVideoTrack(track);
+            s.setAvatarReady(true);
+            setTavusStatus('متصل');
+            addLog('success', 'ویدیوی آواتار Tavus دریافت شد', `${participant.identity}`);
+          } else {
+            s.setAvatarReady(true);
+            addLog('info', 'ترک ویدیویی دریافت شد', `${participant.identity}`);
+          }
+        }
       });
       room.on(RoomEvent.TrackUnsubscribed, (track, _pub, participant) => {
         if (track.kind === Track.Kind.Audio) s.setAssistantAudioTracks((cur) => cur.filter((item) => item !== track));
+        if (track.kind === Track.Kind.Video) {
+          setAvatarVideoTrack(null);
+          s.setAvatarReady(false);
+        }
         addLog('warning', 'ترک از اتاق لغو شد', `${participant.identity} · ${track.kind}`);
       });
       room.on(RoomEvent.AudioPlaybackStatusChanged, () => { const blocked = !room.canPlaybackAudio; s.setAudioNeedsGesture(blocked); addLog(blocked ? 'warning' : 'info', blocked ? 'مرورگر پخش خودکار صدا را مسدود کرد' : 'پخش صدا فعال است'); });
@@ -112,10 +139,11 @@ export default function App() {
       try { await room.startAudio(); s.setAudioNeedsGesture(!room.canPlaybackAudio); } catch (error) { s.setAudioNeedsGesture(true); addLog('warning', 'فعال‌سازی پخش صدا نیاز به تعامل کاربر دارد', errorMessage(error)); }
       for (const participant of room.remoteParticipants.values()) {
         for (const publication of participant.audioTrackPublications.values()) if (publication.track) s.setAssistantAudioTracks((cur) => cur.includes(publication.track) ? cur : [...cur, publication.track]);
+        for (const pub of participant.videoTrackPublications.values()) if (pub.track) { setAvatarVideoTrack(pub.track); s.setAvatarReady(true); }
       }
     } catch (error) {
       s.startingRef.current = false;
-      s.setPhase('idle'); s.setMicEnabled(false); s.setAvatarReady(false); s.setAssistantAudioTracks([]); setTavusUrl(null); setTavusConversationId(null);
+      s.setPhase('idle'); s.setMicEnabled(false); s.setAvatarReady(false); s.setAssistantAudioTracks([]); setTavusUrl(null); setTavusConversationId(null); setAvatarVideoTrack(null);
       addLog('error', 'شروع جلسه ناموفق بود', errorMessage(error));
     }
   }
@@ -126,6 +154,7 @@ export default function App() {
       try { await endTavusConversation(tavusConversationId); addLog('info', 'Tavus conversation پایان یافت'); } catch (e) { addLog('warning', 'پایان Tavus ناموفق', errorMessage(e)); }
       setTavusConversationId(null); setTavusUrl(null); setTavusStatus(''); setTavusError('');
     }
+    setAvatarVideoTrack(null);
     s.roomRef.current?.disconnect(); s.roomRef.current = null; s.setPhase('idle'); s.setMicEnabled(false); s.setAvatarReady(false); s.setAssistantAudioTracks([]); s.setAudioNeedsGesture(false); s.setDraftTranscript(''); setTavusStatus('');
   }
   async function toggleMic() { const room = s.roomRef.current; if (!room) return; try { await room.localParticipant.setMicrophoneEnabled(!s.micEnabled); s.setMicEnabled(!s.micEnabled); addLog('info', s.micEnabled ? 'میکروفون خاموش شد' : 'میکروفون روشن شد'); } catch (e) { addLog('error', 'تغییر وضعیت میکروفون ناموفق بود', errorMessage(e)); } }
@@ -169,7 +198,7 @@ export default function App() {
           </div>
           <aside className="right-column">
             <div className="audio-output" aria-hidden="true">{s.assistantAudioTracks.map((track) => <RemoteAudioOutput key={track.sid} track={track} registry={s.assistantAudioRefs} />)}</div>
-            <VideoPanel avatarEnabled={avatarEnabled} avatarProvider={avatarProvider} avatarReady={s.avatarReady} connected={connected} assistantAudioTracks={s.assistantAudioTracks} audioNeedsGesture={s.audioNeedsGesture} enableAudioPlayback={enableAudioPlayback} tavusUrl={tavusUrl} tavusStatus={tavusStatus} tavusError={tavusError} health={s.health} onRetryTavus={retryTavus} />
+            <VideoPanel avatarEnabled={avatarEnabled} avatarProvider={avatarProvider} avatarReady={s.avatarReady} connected={connected} assistantAudioTracks={s.assistantAudioTracks} audioNeedsGesture={s.audioNeedsGesture} enableAudioPlayback={enableAudioPlayback} tavusUrl={tavusUrl} tavusStatus={tavusStatus} tavusError={tavusError} health={s.health} onRetryTavus={retryTavus} avatarVideoTrack={avatarVideoTrack} avatarVideoRef={avatarVideoRef} />
             <ErrorBoundary>
               <StatusPanel health={s.health} latency={s.latency} connected={connected} />
             </ErrorBoundary>

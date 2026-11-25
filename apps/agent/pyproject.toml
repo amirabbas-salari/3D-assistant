@@ -10,6 +10,7 @@ dependencies = [
     "livekit-plugins-deepgram~=1.8",
     "livekit-plugins-google~=1.8",
     "livekit-plugins-elevenlabs~=1.8",
+    "livekit-plugins-tavus~=1.8",
     "python-dotenv>=1.0.0",
     "chromadb>=1.0.0",
     "openai>=1.0.0",
