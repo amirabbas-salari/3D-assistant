@@ -19,3 +19,16 @@ body { font-family: Vazirmatn, system-ui, sans-serif; background: #0a0a0f; color
 .visualizer { height: 80px; display: flex; align-items: center; justify-content: center; gap: 4px; }
 .bar { width: 4px; background: #6366f1; border-radius: 999px; transition: height 0.1s; }
 .footer { margin-top: 24px; text-align: center; font-size: 12px; color: #71717a; }
+.log-header { display: flex; flex-wrap: wrap; gap: 8px; align-items: center; justify-content: space-between; padding: 12px; border-bottom: 1px solid #27272a; }
+.log-actions { display: flex; gap: 6px; align-items: center; flex-wrap: wrap; }
+.btn-sm { padding: 6px 10px; font-size: 12px; border-radius: 8px; }
+.log-select { background: #27272a; color: #e4e4e7; border: 1px solid #3f3f46; border-radius: 8px; padding: 6px 8px; font-size: 12px; }
+.log-body { max-height: 48vh; overflow-y: auto; background: #09090b; padding: 10px 12px; font-family: ui-monospace, SFMono-Regular, Menlo, monospace; font-size: 12px; line-height: 1.5; user-select: text; }
+.log-line { padding: 4px 0; border-bottom: 1px dashed #18181b; white-space: pre-wrap; word-break: break-word; }
+.log-time { color: #71717a; }
+.log-level { font-weight: 700; text-transform: uppercase; }
+.log-info .log-level { color: #22c55e; }
+.log-error .log-level { color: #ef4444; }
+.log-warn .log-level { color: #eab308; }
+.log-debug .log-level { color: #a78bfa; }
+.log-data { margin: 6px 0 0 0; background: #18181b; border: 1px solid #27272a; border-radius: 8px; padding: 8px; font-size: 11px; color: #d4d4d8; overflow-x: auto; white-space: pre-wrap; }
