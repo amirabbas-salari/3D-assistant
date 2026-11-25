@@ -13,7 +13,7 @@ Monorepo استاندارد با مرز ماژولار تمیز، قابل نگ�
 │   │   │   ├── __main__.py     # python -m sam.agent
 │   │   │   ├── config/         # env, llm, speed (profiles)
 │   │   │   ├── speech/         # stt, tts, providers
-│   │   │   ├── avatar/         # provider, spatius, did, manager
+│   │   │   ├── avatar/         # provider, tavus, manager
 │   │   │   ├── rag/            # engine.py + tools.py (preload/tool)
 │   │   │   ├── latency/        # tracker.py
 │   │   │   ├── assistant/      # prompt + agent (PersianAssistant)
@@ -29,7 +29,7 @@ Monorepo استاندارد با مرز ماژولار تمیز، قابل نگ�
 │   │   │   ├── hooks/          # useAppState
 │   │   │   ├── lib/            # latency, utils, lipsync-adapter
 │   │   │   ├── api/            # client (health, session, cleanup)
-│   │   │   ├── lipsync.js      # هماهنگی لب/صدا Spatius
+│   │   │   ├── lipsync.js      # هماهنگی لب/صدا (legacy, Tavus داخلی دارد)
 │   │   │   └── styles/         # globals.css
 │   │   ├── vite.config.js
 │   │   └── package.json (@3d-assistant/web)
@@ -62,7 +62,7 @@ Monorepo استاندارد با مرز ماژولار تمیز، قابل نگ�
 | **Monorepo + Workspaces** | `package.json` با `workspaces: [apps/web, apps/api, packages/*]`؛ هر app مستقل ولی `npm run dev` از ریشه هر دو را با `concurrently` اجرا می‌کند |
 | **src-layout Python** | `apps/agent/src/sam` + `pyproject.toml` با `package-dir={"": "src"}` |
 | **تفکیک deployable** | `apps/web` (استاتیک)، `apps/api` (Node)، `apps/agent` (Python worker) — هر کدام Dockerfile جدا |
-| **Module boundaries** | `config` فقط env/llm/speed؛ `speech` فقط STT/TTS؛ `avatar` فقط D-ID/Spatius؛ `session` فقط entrypoint؛ بدون چرخه‌ی وابستگی |
+| **Module boundaries** | `config` فقط env/llm/speed؛ `speech` فقط STT/TTS؛ `avatar` فقط Tavus؛ `session` فقط entrypoint؛ بدون چرخه‌ی وابستگی |
 | **Facade pattern** | `apps/agent/src/sam/agent.py` فقط re-export؛ منطق داخل `session/entrypoint.py` |
 
 ## جریان صوت (streaming)

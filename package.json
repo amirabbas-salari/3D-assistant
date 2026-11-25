@@ -5,17 +5,14 @@
   "type": "module",
   "workspaces": [
     "apps/web",
-    "apps/web-streamcore",
     "apps/api",
     "packages/*"
   ],
   "scripts": {
     "dev": "concurrently -k \"npm:dev:api\" \"npm:dev:web\"",
     "dev:web": "vite --config apps/web/vite.config.js --host 0.0.0.0",
-    "dev:web:streamcore": "vite --config apps/web-streamcore/vite.config.js --host 0.0.0.0",
     "dev:api": "node apps/api/src/index.js",
     "dev:agent": "python -m sam.agent start",
-    "dev:agent:streamcore": "uvicorn sam_streamcore.server:app --host 0.0.0.0 --port 8000 --reload --app-dir apps/streamcore-agent/src",
     "build": "vite build --config apps/web/vite.config.js",
     "build:all": "npm run build && docker compose -f infra/docker/docker-compose.yml build",
     "start": "node apps/api/src/index.js",
@@ -24,8 +21,6 @@
     "clean": "rm -rf dist apps/web/dist .rag"
   },
   "dependencies": {
-    "@spatius/avatarkit": "^1.3.11",
-    "@spatius/avatarkit-rtc": "^1.1.7",
     "dotenv": "^16.4.7",
     "express": "^4.21.2",
     "livekit-client": "^2.24.1",

@@ -3,10 +3,9 @@ export function avatarEnabled() {
 }
 export function avatarProvider() {
   if (!avatarEnabled()) return 'none';
-  const p = String(process.env.AVATAR_PROVIDER ?? 'spatius').trim().toLowerCase();
+  const p = String(process.env.AVATAR_PROVIDER ?? 'tavus').trim().toLowerCase();
   if (['','none','off','false'].includes(p)) return 'none';
-  if (['did','d-id','didid'].includes(p)) return 'did';
-  return 'spatius';
+  return 'tavus';
 }
 export function speechProvider() {
   const p = String(process.env.SPEECH_PROVIDER ?? 'inference').trim().toLowerCase();
@@ -52,8 +51,7 @@ export function speechConfigured() {
   if (speechProvider() === 'direct') return Boolean(process.env.DEEPGRAM_API_KEY && process.env.GOOGLE_API_KEY);
   return Boolean(process.env.LIVEKIT_URL && process.env.LIVEKIT_API_KEY && process.env.LIVEKIT_API_SECRET);
 }
-export function didConfigured() { return Boolean(process.env.DID_API_KEY && process.env.DID_AGENT_ID); }
-export function spatiusConfigured() { return Boolean(process.env.SPATIUS_API_KEY && process.env.SPATIUS_APP_ID && process.env.SPATIUS_AVATAR_ID); }
+export function tavusConfigured() { return Boolean(process.env.TAVUS_API_KEY && (process.env.TAVUS_REPLICA_ID || process.env.TAVUS_PERSONA_ID)); }
 export function isConfigured() {
   const rawLlm = String(process.env.LLM_PROVIDER ?? '').trim().toLowerCase();
   const isLivekitLlm = ['livekit','inference','lk','livekit-inference','livekit_inference',''].includes(rawLlm);
@@ -66,6 +64,6 @@ export function isConfigured() {
   if (!voice) return false;
   const provider = avatarProvider();
   if (provider === 'none') return true;
-  if (provider === 'did') return didConfigured();
-  return spatiusConfigured();
+  if (provider === 'tavus') return tavusConfigured();
+  return false;
 }

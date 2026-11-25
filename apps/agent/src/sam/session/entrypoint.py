@@ -242,12 +242,13 @@ _HARD_END = frozenset(".!?؟…\n")
 _SOFT_END = frozenset("،؛:;,")
 
 
-def _split_persian(text: str, min_hard: int = 6, min_soft: int = 24) -> list[str]:
+def _split_persian(text: str, min_hard: int = 4, min_soft: int = 10) -> list[str]:
     """متن را به تکه‌های قابل‌پخش می‌شکند؛ concat تکه‌ها دقیقاً برابر ورودی است.
 
-    * پایان قطعی: . ! ? ؟ … و newline  (حداقل min_hard کاراکتر)
-    * پایان نرم: ، ؛ : ; ,           (حداقل min_soft کاراکتر)
+    * پایان قطعی: . ! ? ؟ … و newline  (حداقل min_hard کاراکتر — کوتاه برای TTFS سریع)
+    * پایان نرم: ، ؛ : ; ,           (حداقل min_soft کاراکتر — 10 به جای 24 تا اولین «،» زود بسته شود)
     * علامت فقط وقتی مرز حساب می‌شود که بعدش فاصله بیاید (3.5 و 10:30 نشکند)
+    * بهینه برای voice: اولین جمله 5-9 کلمه‌ای باید در 80-120ms بعد از TTFT بسته شود تا TTS فورا شروع کند
     """
     n = len(text)
     tokens: list[str] = []
@@ -274,7 +275,7 @@ def _split_persian(text: str, min_hard: int = 6, min_soft: int = 24) -> list[str
 
 
 class FastPersianTokenizer(_SentenceTokenizerBase):  # type: ignore[misc,valid-type]
-    def __init__(self, *, min_hard: int = 6, min_soft: int = 24, min_token_len: int = 10, min_ctx_len: int = 10):
+    def __init__(self, *, min_hard: int = 3, min_soft: int = 8, min_token_len: int = 2, min_ctx_len: int = 2):
         super().__init__()
         self._min_hard, self._min_soft = min_hard, min_soft
         self._min_token_len, self._min_ctx_len = min_token_len, min_ctx_len
@@ -667,11 +668,14 @@ async def entrypoint(ctx: agents.JobContext) -> None:
 
     # ── TTS wrapping: streaming → fallback → tracking ──
     native_streaming = bool(getattr(tts.capabilities, "streaming", False))
-    if not native_streaming and BufferedSentenceStream is not None:
+    # برای فارسی: حتی اگر TTS قبلاً streaming باشد، توکنایزر پیش‌فرض انگلیسی‌محور است و «،» فارسی را مرز نمی‌شناسد → TTFS بالا
+    needs_persian = (cfg.tts_language or "").strip().lower().startswith("fa")
+    should_wrap = BufferedSentenceStream is not None and (not native_streaming or needs_persian)
+    if should_wrap:
         try:
             from livekit.agents.tts import StreamAdapter
             tts = StreamAdapter(tts=tts, sentence_tokenizer=FastPersianTokenizer())  # type: ignore[arg-type]
-            job_logger.info("TTS streaming تضمین شد: FastPersianTokenizer (جمله‌ای + بندی روی ،؛:)")
+            job_logger.info("TTS streaming تضمین شد: FastPersianTokenizer (3/8, جمله‌ای + بندی روی ،؛:) native=%s→True", native_streaming)
         except Exception as e:
             job_logger.warning("StreamAdapter فعال‌سازی نشد: %s", e)
 
@@ -682,7 +686,7 @@ async def entrypoint(ctx: agents.JobContext) -> None:
             # برای صدا، فیل‌اور سریع‌تر بهتر از ۱۰ ثانیه سکوت است.
             try:
                 tts = FallbackAdapter([tts, fallback_tts],  # type: ignore[arg-type]
-                                      attempt_timeout=_env_float("TTS_FALLBACK_ATTEMPT_TIMEOUT", 5.0),
+                                      attempt_timeout=_env_float("TTS_FALLBACK_ATTEMPT_TIMEOUT", 3.0),
                                       max_retry_per_tts=_env_int("TTS_FALLBACK_MAX_RETRY", 1))
             except TypeError:
                 tts = FallbackAdapter([tts, fallback_tts])  # type: ignore[arg-type]
@@ -760,7 +764,7 @@ async def entrypoint(ctx: agents.JobContext) -> None:
     av_provider = avatar_provider()
     if av_provider == "none":
         job_logger.info("Avatar disabled (AVATAR_ENABLED=%s, AVATAR_PROVIDER=%s); using direct audio",
-                        os.getenv("AVATAR_ENABLED", "false"), os.getenv("AVATAR_PROVIDER", "spatius"))
+                        os.getenv("AVATAR_ENABLED", "false"), os.getenv("AVATAR_PROVIDER", "tavus"))
     avatar = await start_avatar(av_provider, session, ctx.room, job_logger)
 
     # ── RAG objects ──
