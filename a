@@ -1,0 +1,233 @@
+
+# ============================================================
+# SERVER CONFIGURATION
+# ============================================================
+
+PORT=3001
+
+
+# ============================================================
+# AGENT CONFIGURATION
+# ============================================================
+
+LIVEKIT_AGENT_NAME="avatar"
+AGENT_SPEED_PROFILE=ultra
+
+
+# ============================================================
+# LIVEKIT CLOUD CONFIGURATION
+# ============================================================
+
+# LIVEKIT_URL="wss://horno-avatar-jr68tfeq.livekit.cloud"
+# LIVEKIT_URL="wss://horno-5ozvz21g.livekit.cloud"
+# LIVEKIT_URL="wss://livekit.amirabbassalarinasab.workers.dev"
+# LIVEKIT_API_KEY="APIXNXyqQPCfPZq"
+# LIVEKIT_API_KEY="APITThMZ3jcbZVL"
+# LIVEKIT_API_SECRET="mHuMNyeY1md4iNgQ6bJuClqOOvJqmNfui4byy8RKTiy"
+# LIVEKIT_API_SECRET="kfjep2fDvoi4s0zWdawj4DfjeZt29rmdiBOxNbJz2eNP"
+
+LIVEKIT_URL='wss://ai-voice-agent-m09crb6c.livekit.cloud'
+LIVEKIT_API_KEY='APIyyfUVZav5KU6'
+LIVEKIT_API_SECRET='yKTCPS4xnumyKZAOXrHa7pcdctOVq0bj0xWIuBX6zNF'
+
+
+# Persian STT / TTS / LLM
+LIVEKIT_STT_MODEL="deepgram/nova-3"
+LIVEKIT_STT_LANGUAGE="fa"
+
+LIVEKIT_LLM_MODEL="google/gemini-3.8-flash"
+
+LIVEKIT_TTS_MODEL="google/gemini-3.8-flash-tts"
+LIVEKIT_TTS_VOICE="Charon"
+LIVEKIT_TTS_LANGUAGE="fa"
+
+# Alternative TTS models
+# LIVEKIT_TTS_MODEL="google/gemini-3.8-flash-lite-tts"
+# LIVEKIT_TTS_MODEL="cartesia/sonic-3"
+
+
+# ============================================================
+# LLM PROVIDER CONFIGURATION
+# ============================================================
+
+LLM_PROVIDER=cloudflare
+# LLM_PROVIDER=openrouter
+
+
+# ------------------------------------------------------------
+# OpenRouter
+# ------------------------------------------------------------
+
+# OPENROUTER_API_KEY="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"
+# OPENROUTER_API_KEY="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"
+OPENROUTER_API_KEY="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"
+
+OPENROUTER_MODEL="openai/gpt-oss-120b"
+OPENROUTER_LLM_MODEL="openai/gpt-oss-120b"
+
+# OPENROUTER_MODEL=deepseek/deepseek-v4.1-flash
+# OPENROUTER_LLM_MODEL=deepseek/deepseek-v4.1-flash
+
+OPENROUTER_LLM_MAX_TOKENS=150
+
+# Optional
+# OPENROUTER_BASE_URL=https://openrouter.ai/api/v1
+# OPENROUTER_HTTP_REFERER=https://yourdomain.com
+# OPENROUTER_X_TITLE=3D-assistant
+
+
+# ------------------------------------------------------------
+# Google Gemini
+# ------------------------------------------------------------
+
+GOOGLE_API_KEY="AQ.Ab8RN6I67LK9N3WzjxdrURkwgE7FjgXRbZLstUsZbkCV4hmIyQ"
+GOOGLE_LLM_MODEL="gemini-3.8-flash"
+
+
+# ------------------------------------------------------------
+# Cloudflare Workers AI
+# ------------------------------------------------------------
+
+CLOUDFLARE_ACCOUNT_ID="ace866bb43745f0fd87b9240fbe7e1fa"
+CLOUDFLARE_API_TOKEN="cfut_CS05kfHLlo3T3tgpG0RQ337T9TDq5cfRXXbOqTQ1f5efaa6f"
+
+CLOUDFLARE_LLM_MODEL="@cf/openai/gpt-oss-120b"
+CLOUDFLARE_LLM_MAX_TOKENS=150
+
+# Optional
+# CLOUDFLARE_LLM_REASONING_EFFORT=low
+
+# Alternative models
+# CLOUDFLARE_LLM_MODEL="@cf/meta/llama-3.3-70b-instruct-fp8-fast"
+# CLOUDFLARE_LLM_MODEL="@cf/zai-org/glm-4.7-flash"
+# CLOUDFLARE_LLM_MODEL="@cf/google/gemma-4-26b-a4b-it"
+
+
+# ============================================================
+# TTS CONFIGURATION
+# ============================================================
+
+TTS_PROVIDER=openrouter
+# TTS_PROVIDER=inference
+
+
+# ------------------------------------------------------------
+# OpenRouter TTS
+# ------------------------------------------------------------
+
+OPENROUTER_TTS_MODEL="elevenlabs/eleven-v3-conversational"
+OPENROUTER_TTS_VOICE="george"
+OPENROUTER_TTS_RESPONSE_FORMAT="mp3"
+
+
+# ------------------------------------------------------------
+# Cloudflare TTS
+# ------------------------------------------------------------
+
+CLOUDFLARE_TTS_MODEL="elevenlabs/eleven-flash-v2-5"
+CLOUDFLARE_TTS_VOICE_ID="JBFqnCBsd6RMkjVDRZzb"
+
+
+# ------------------------------------------------------------
+# ElevenLabs Direct API (Optional)
+# ------------------------------------------------------------
+
+# TTS_PROVIDER=elevenlabs
+# ELEVENLABS_API_KEY="your-api-key"
+# ELEVENLABS_VOICE_ID="JBFqnCBsd6RMkjVDRZzb"
+# ELEVENLABS_MODEL="eleven_flash_v2_5"
+# ELEVENLABS_ENCODING="mp3_22050_32"
+
+
+# ------------------------------------------------------------
+# LiveKit Inference TTS
+# ------------------------------------------------------------
+
+# TTS_PROVIDER=inference
+
+
+# ============================================================
+# AVATAR CONFIGURATION
+# ============================================================
+
+# Master switch
+# AVATAR_ENABLED=false
+AVATAR_ENABLED=true
+
+# Available providers:
+# did
+# spatius
+# AVATAR_PROVIDER=spatius
+AVATAR_PROVIDER=tavus
+
+
+# ------------------------------------------------------------
+# D-ID Avatar
+# ------------------------------------------------------------
+
+DID_API_KEY="Z29vZ2xlLW9hdXRoMnwxMTE2NTI3NDgwOTEzODU0Mjg3MjhAYWtfelkxaThHOHpaTFVSdTVnVmVuWTIt:HaoD86VIthCpHqtBhYdjg"
+
+DID_AGENT_ID="v2_agt_MkgXBQjy"
+
+DID_AUDIO_SAMPLE_RATE=24000
+
+
+# ------------------------------------------------------------
+# Spatius Avatar
+# ------------------------------------------------------------
+
+SPATIUS_API_KEY="sk-PxHZxBt_YUoTWLe-0xtnIMMPrm_qNwYL53JQ8Uq1zcs="
+
+SPATIUS_APP_ID="app_mwnf58x6_sb971h"
+
+SPATIUS_AVATAR_ID="566981dd-1d95-4844-953e-d67e18b2fde8"
+
+SPATIUS_REGION="auto"
+SPATIUS_SAMPLE_RATE=24000
+
+# Alternative avatars
+# SPATIUS_AVATAR_ID="c7069121-8245-4015-9940-82d0dc0c6bda" # Halima / Female
+# SPATIUS_AVATAR_ID="56f31c71-58ff-410f-85d2-11b9658c7b49" # Ethan / Male
+
+
+# ============================================================
+# TAVUS CONFIGURATION
+# ============================================================
+
+# TAVUS_API_KEY="1823434ca79a4b72b446337305600452"
+TAVUS_API_KEY="7a1b5856f3cd415e8e6008a4b775b1db"
+
+# TAVUS_PAL_ID="p31569f172c6"
+TAVUS_PERSONA_ID="p73bdd75644f"
+TAVUS_REPLICA_ID="rbb3d627a705"
+# TAVUS_LANGUAGES='fa'
+
+
+
+
+# ============================================================
+# RAG CONFIGURATION
+# ============================================================
+
+RAG_ENABLED=true
+RAG_PRELOAD=true
+RAG_TOOL_ENABLED=true
+
+
+
+
+
+# AGENT_MIN_ENDPOINTING_DELAY=0.25
+
+
+
+AGENT_SPEED_PROFILE=ultra
+# یا اگر هدست داری و می‌خوای <0.4s بشه:
+# AGENT_SPEED_PROFILE=instant
+
+# این دو تا پروفایل رو override می‌کنن — مطمئن شو خالی نموندن:
+AGENT_MIN_ENDPOINTING_DELAY=0.12
+AGENT_MAX_ENDPOINTING_DELAY=0.6
+
+# برای فارسی، threshold پیش‌فرض 0.356 خیلی محافظه‌کاره → 0.2 بذار تا جملات متوسط سریع قبول شن
+LIVEKIT_TURN_DETECTOR_THRESHOLD=0.2
